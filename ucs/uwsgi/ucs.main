@@ -1,0 +1,16 @@
+[uwsgi]
+plugin=python3
+socket=0.0.0.0:9100
+processes=25
+harakiri=300
+chdir=/ucs
+module=ucs.wsgi:application
+master=True
+pidfile=/tmp/ucs.pid
+vacuum=True
+max-requests=500
+py-autoreload=3
+env=DJANGO_SETTINGS_MODULE=ucs.settings
+env=LANG=ru_RU.utf8
+env=LC_ALL=ru_RU.UTF-8
+env=LC_LANG=ru_RU.UTF-8

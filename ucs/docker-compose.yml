@@ -1,0 +1,29 @@
+version: "3"
+
+services:
+  ucs:
+    build: .
+    command: /ucs/init.sh
+    working_dir: /ucs
+    expose:
+      - 9100
+    networks:
+      - ucs
+
+  nginx:
+    build: .
+    ports:
+      - 8081:8081
+    command: /usr/sbin/nginx -g 'daemon off;'
+    networks:
+      - ucs
+    depends_on:
+      - ucs
+
+networks:
+  ucs:
+    driver: bridge
+
+volumes:
+    postgres: { }
+    pgadmin: { }
