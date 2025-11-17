@@ -74,7 +74,7 @@ class Property(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f"{self.name} ({self.project.name})"
+        return f"{self.name} ({self.object.name})"
     
     def get_value(self):
         """Возвращает значение свойства в зависимости от типа"""
