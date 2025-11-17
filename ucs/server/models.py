@@ -46,11 +46,11 @@ class Property(models.Model):
         ('text', 'Текст'),
     ]
     
-    project = models.ForeignKey(
+    object = models.ForeignKey(
         Object,
         on_delete=models.CASCADE,
         related_name='properties',
-        verbose_name='Проект'
+        verbose_name='Объект'
     )
     name = models.CharField(max_length=255, verbose_name='Название свойства')
     description = models.TextField(blank=True, null=True, verbose_name='Описание')
