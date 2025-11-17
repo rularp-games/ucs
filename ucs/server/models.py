@@ -47,7 +47,7 @@ class Property(models.Model):
     ]
     
     project = models.ForeignKey(
-        Project,
+        Object,
         on_delete=models.CASCADE,
         related_name='properties',
         verbose_name='Проект'
