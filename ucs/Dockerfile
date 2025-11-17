@@ -35,5 +35,3 @@ RUN /ucs/.pyenv/versions/ucs/bin/pip3 install -r requirements.txt
 RUN /ucs/.pyenv/versions/ucs/bin/python3 manage.py collectstatic --noinput
 
 RUN ln -s /ucs/ucs.conf /etc/nginx/conf.d/ucs.conf
-
-# RUN chmod 755 /ucs/init.sh
