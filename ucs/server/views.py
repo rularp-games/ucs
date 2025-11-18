@@ -40,6 +40,17 @@ class ObjectViewSet(viewsets.ModelViewSet):
             serializer.save(project=project)
         else:
             serializer.save()
+    
+    @action(detail=True, methods=['get'], url_path='properties')
+    def properties(self, request, pk=None):
+        """
+        Получить все свойства для конкретного объекта
+        Пример: GET /api/objects/{id}/properties/
+        """
+        object = self.get_object()
+        properties = Property.objects.filter(object=object).select_related('object', 'object__project')
+        serializer = PropertySerializer(properties, many=True)
+        return Response(serializer.data)
 
 
 class PropertyViewSet(viewsets.ModelViewSet):
