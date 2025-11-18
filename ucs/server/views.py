@@ -2,8 +2,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from .models import Object
-from .serializers import ObjectSerializer
+from .models import Object, Property
+from .serializers import ObjectSerializer, PropertySerializer
 
 
 class ObjectViewSet(viewsets.ModelViewSet):
@@ -38,5 +38,40 @@ class ObjectViewSet(viewsets.ModelViewSet):
             from .models import Project
             project = get_object_or_404(Project, id=project_id)
             serializer.save(project=project)
+        else:
+            serializer.save()
+
+
+class PropertyViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet для работы со свойствами через REST API.
+    
+    list: Получить список всех свойств
+    retrieve: Получить конкретное свойство по ID
+    create: Создать новое свойство
+    update: Обновить свойство
+    partial_update: Частично обновить свойство
+    destroy: Удалить свойство
+    """
+    queryset = Property.objects.all()
+    serializer_class = PropertySerializer
+    
+    def get_queryset(self):
+        """
+        Опциональная фильтрация по object_id через query параметр
+        Пример: /api/properties/?object_id=1
+        """
+        queryset = Property.objects.select_related('object', 'object__project').all()
+        object_id = self.request.query_params.get('object_id', None)
+        if object_id is not None:
+            queryset = queryset.filter(object_id=object_id)
+        return queryset
+    
+    def perform_create(self, serializer):
+        """Создание свойства с обработкой object_id"""
+        object_id = self.request.data.get('object_id')
+        if object_id:
+            object = get_object_or_404(Object, id=object_id)
+            serializer.save(object=object)
         else:
             serializer.save()
