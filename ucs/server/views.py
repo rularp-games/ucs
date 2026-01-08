@@ -331,9 +331,24 @@ class TaskStatusView(APIView):
         # Добавляем результат или информацию о прогрессе
         if result.status == 'PROGRESS':
             response_data['result'] = result.info
+        elif result.status == 'FAILURE':
+            # Если задача упала с исключением, преобразуем его в читаемый формат
+            exc = result.result
+            response_data['result'] = {
+                'error': str(exc),
+                'type': type(exc).__name__
+            }
         elif result.ready():
             try:
-                response_data['result'] = result.result
+                task_result = result.result
+                # Проверяем, что результат сериализуем
+                if isinstance(task_result, Exception):
+                    response_data['result'] = {
+                        'error': str(task_result),
+                        'type': type(task_result).__name__
+                    }
+                else:
+                    response_data['result'] = task_result
             except Exception as e:
                 response_data['result'] = {'error': str(e)}
         

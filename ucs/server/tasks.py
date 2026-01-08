@@ -79,7 +79,7 @@ def change_value_gradually(self, property_id, target_value, step, interval=1.0):
         # Увеличиваем значение
         while current_value < target_value:
             # Проверяем отмену
-            if self.is_aborted():
+            if check_revoked():
                 return {
                     'status': 'aborted',
                     'property_id': property_id,
@@ -101,7 +101,7 @@ def change_value_gradually(self, property_id, target_value, step, interval=1.0):
         # Уменьшаем значение
         while current_value > target_value:
             # Проверяем отмену
-            if self.is_aborted():
+            if check_revoked():
                 return {
                     'status': 'aborted',
                     'property_id': property_id,
