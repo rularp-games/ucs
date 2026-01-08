@@ -2,7 +2,8 @@
   <div id="app">
     <nav>
       <router-link to="/cyberwordly">Cyberwordly</router-link> |
-      <router-link to="/drones">Drones</router-link>
+      <router-link to="/drones">Drones</router-link> |
+      <router-link to="/airlock">Airlock</router-link>
     </nav>
     <router-view/>
   </div>

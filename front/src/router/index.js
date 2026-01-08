@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import HelloWorld from '../components/HelloWorld.vue'
 import Cyberwordly from '../components/Cyberwordly.vue'
 import Drones from '../components/Drones.vue'
+import Airlock from '../components/Airlock.vue'
 
 const routes = [
   {
@@ -19,6 +20,11 @@ const routes = [
     path: '/drones',
     name: 'Drones',
     component: Drones
+  },
+  {
+    path: '/airlock',
+    name: 'Airlock',
+    component: Airlock
   }
 ]
 

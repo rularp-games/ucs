@@ -1,5 +1,5 @@
 import time
-from celery import shared_task
+from celery import shared_task, current_task
 
 
 @shared_task
@@ -16,10 +16,11 @@ def send_notification(user_id, message):
     return True
 
 
-@shared_task
-def change_value_gradually(property_id, target_value, step, interval=1.0):
+@shared_task(bind=True)
+def change_value_gradually(self, property_id, target_value, step, interval=1.0):
     """
     Постепенно изменяет числовое значение свойства с указанным шагом до целевого значения.
+    Поддерживает отмену через revoke.
     
     Args:
         property_id: ID свойства для изменения
@@ -31,6 +32,7 @@ def change_value_gradually(property_id, target_value, step, interval=1.0):
         dict: Результат выполнения с начальным и конечным значениями
     """
     from .models import Property
+    from celery.exceptions import Ignore
     
     try:
         prop = Property.objects.get(id=property_id)
@@ -43,29 +45,86 @@ def change_value_gradually(property_id, target_value, step, interval=1.0):
     current_value = prop.value_number or 0.0
     initial_value = current_value
     step = abs(step)  # Убедимся, что шаг положительный
+    steps_taken = 0
+    
+    # Вычисляем общее количество шагов для прогресса
+    total_steps = int(abs(target_value - initial_value) / step) if step else 0
+    
+    def check_revoked():
+        """Проверяем, была ли задача отменена"""
+        # Проверка через AsyncResult
+        from celery.result import AsyncResult
+        result = AsyncResult(self.request.id)
+        return result.state == 'REVOKED'
+    
+    def update_progress(current, target, steps):
+        """Обновляем прогресс задачи"""
+        if total_steps > 0:
+            progress = int((steps / total_steps) * 100)
+        else:
+            progress = 100
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'current_value': current,
+                'target_value': target,
+                'progress': progress,
+                'steps_taken': steps,
+                'total_steps': total_steps
+            }
+        )
     
     # Определяем направление изменения
     if current_value < target_value:
         # Увеличиваем значение
         while current_value < target_value:
+            # Проверяем отмену
+            if self.is_aborted():
+                return {
+                    'status': 'aborted',
+                    'property_id': property_id,
+                    'initial_value': initial_value,
+                    'final_value': current_value,
+                    'target_value': target_value,
+                    'steps_taken': steps_taken
+                }
+            
             current_value = min(current_value + step, target_value)
             prop.value_number = current_value
             prop.save(update_fields=['value_number', 'updated_at'])
+            steps_taken += 1
+            update_progress(current_value, target_value, steps_taken)
+            
             if current_value < target_value:
                 time.sleep(interval)
     elif current_value > target_value:
         # Уменьшаем значение
         while current_value > target_value:
+            # Проверяем отмену
+            if self.is_aborted():
+                return {
+                    'status': 'aborted',
+                    'property_id': property_id,
+                    'initial_value': initial_value,
+                    'final_value': current_value,
+                    'target_value': target_value,
+                    'steps_taken': steps_taken
+                }
+            
             current_value = max(current_value - step, target_value)
             prop.value_number = current_value
             prop.save(update_fields=['value_number', 'updated_at'])
+            steps_taken += 1
+            update_progress(current_value, target_value, steps_taken)
+            
             if current_value > target_value:
                 time.sleep(interval)
     
     return {
+        'status': 'completed',
         'property_id': property_id,
         'initial_value': initial_value,
         'final_value': current_value,
         'target_value': target_value,
-        'steps_taken': abs(target_value - initial_value) / step if step else 0
+        'steps_taken': steps_taken
     }
