@@ -616,8 +616,8 @@ export default {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             target_value: targetValue,
-            step: 0.05,      // 5% за шаг
-            interval: 0.25   // 0.25 секунды между шагами (~5 секунд на полный цикл)
+            step: 0.01,      // 1% за шаг
+            interval: 0.1   // 0.1 секунды между шагами
           })
         })
         
