@@ -17,7 +17,11 @@
 
     <div class="content-wrapper">
       <h1 class="title">УПРАВЛЕНИЕ ШЛЮЗОМ</h1>
-      <p class="subtitle">AIRLOCK CONTROL SYSTEM v2.4.1</p>
+      <p class="subtitle">AIRLOCK CONTROL SYSTEM v2.5.0</p>
+      <p class="object-info" v-if="currentObjectId">
+        {{ currentObjectName || 'Airlock' }} #{{ currentObjectId }}
+        <span v-if="projectName"> | Проект: {{ projectName }}</span>
+      </p>
 
       <!-- Визуализация шлюза -->
       <div class="airlock-visual">
@@ -173,11 +177,15 @@
         <p>Создайте в admin panel:</p>
         <p>1. Project (любой)</p>
         <p>2. Object: name = "Airlock"</p>
-        <p>3. Properties для этого объекта:</p>
-        <p>   • locked (boolean) = false</p>
-        <p>   • outer_door_open (boolean) = false</p>
-        <p>   • inner_door_open (boolean) = false</p>
-        <p>   • pressure (number) = 1.0</p>
+        <p>Свойства создадутся автоматически!</p>
+        <p class="url-hint">Или используйте URL:</p>
+        <p class="url-example">/airlock/ProjectName/ObjectId</p>
+      </div>
+
+      <!-- Создание свойств -->
+      <div class="help-section creating-info" v-if="creatingProperties">
+        <h3>Создание свойств...</h3>
+        <p>Пожалуйста, подождите</p>
       </div>
 
       <!-- Celery задача активна -->
@@ -193,12 +201,31 @@
 <script>
 // Конфигурация API
 const API_BASE_URL = '/api'
-const AIRLOCK_OBJECT_NAME = 'Airlock'
+const DEFAULT_OBJECT_NAME = 'Airlock'
 const POLLING_INTERVAL = 500 // мс
 const TASK_POLLING_INTERVAL = 250 // мс - для отслеживания прогресса задачи
 
+// Определение необходимых свойств шлюза
+const REQUIRED_PROPERTIES = [
+  { name: 'locked', type: 'boolean', defaultValue: false, description: 'Блокировка шлюза' },
+  { name: 'outer_door_open', type: 'boolean', defaultValue: false, description: 'Состояние внешней двери' },
+  { name: 'inner_door_open', type: 'boolean', defaultValue: false, description: 'Состояние внутренней двери' },
+  { name: 'pressure', type: 'number', defaultValue: 1.0, description: 'Давление в камере шлюза (0.0 - 1.0 atm)' }
+]
+
 export default {
   name: 'AirlockControl',
+  props: {
+    // Параметры из URL
+    projectName: {
+      type: String,
+      default: null
+    },
+    objectId: {
+      type: [String, Number],
+      default: null
+    }
+  },
   data() {
     return {
       // Состояние шлюза
@@ -211,11 +238,14 @@ export default {
       cycleDirection: null,
       
       // API данные
-      objectId: null,
+      currentObjectId: null,
+      currentProjectId: null,
+      currentObjectName: null,
       properties: {}, // { name: { id, value } }
       apiConnected: false,
       apiError: null,
       loading: true,
+      creatingProperties: false,
       
       // Celery задача
       currentTaskId: null,
@@ -296,25 +326,52 @@ export default {
       this.addLog('info', 'Подключение к серверу...')
       
       try {
-        // Ищем объект Airlock по имени (используем новый endpoint с фильтрацией)
-        const objectsResponse = await fetch(`${API_BASE_URL}/objects/?name=${encodeURIComponent(AIRLOCK_OBJECT_NAME)}`)
-        if (!objectsResponse.ok) throw new Error('Ошибка получения объектов')
+        let airlockObject = null
         
-        const objects = await objectsResponse.json()
-        
-        if (objects.length === 0) {
-          this.apiError = `Объект "${AIRLOCK_OBJECT_NAME}" не найден. Создайте его через admin.`
-          this.addLog('error', this.apiError)
-          this.loading = false
-          return
+        // Если передан objectId из URL - используем его напрямую
+        if (this.objectId) {
+          this.addLog('info', `Загрузка объекта ID: ${this.objectId}`)
+          
+          const response = await fetch(`${API_BASE_URL}/objects/${this.objectId}/`)
+          if (!response.ok) {
+            throw new Error(`Объект с ID ${this.objectId} не найден`)
+          }
+          
+          airlockObject = await response.json()
+          this.currentObjectName = airlockObject.name
+          
+        } else {
+          // Ищем объект по имени (по умолчанию "Airlock")
+          const objectName = DEFAULT_OBJECT_NAME
+          this.addLog('info', `Поиск объекта "${objectName}"...`)
+          
+          const objectsResponse = await fetch(`${API_BASE_URL}/objects/?name=${encodeURIComponent(objectName)}`)
+          if (!objectsResponse.ok) throw new Error('Ошибка получения объектов')
+          
+          const objects = await objectsResponse.json()
+          
+          if (objects.length === 0) {
+            this.apiError = `Объект "${objectName}" не найден. Создайте его через admin.`
+            this.addLog('error', this.apiError)
+            this.loading = false
+            return
+          }
+          
+          airlockObject = objects[0]
+          this.currentObjectName = objectName
         }
         
-        const airlockObject = objects[0]
-        this.objectId = airlockObject.id
-        this.addLog('success', `Объект "${AIRLOCK_OBJECT_NAME}" найден (ID: ${this.objectId})`)
+        this.currentObjectId = airlockObject.id
+        this.currentProjectId = airlockObject.project?.id
+        
+        const projectInfo = this.projectName ? ` (проект: ${this.projectName})` : ''
+        this.addLog('success', `Объект "${airlockObject.name}" найден (ID: ${this.currentObjectId})${projectInfo}`)
         
         // Загружаем свойства
         await this.loadProperties()
+        
+        // Проверяем и создаём недостающие свойства
+        await this.ensureRequiredProperties()
         
         this.apiConnected = true
         this.loading = false
@@ -333,7 +390,7 @@ export default {
     
     async loadProperties() {
       try {
-        const response = await fetch(`${API_BASE_URL}/objects/${this.objectId}/properties/`)
+        const response = await fetch(`${API_BASE_URL}/objects/${this.currentObjectId}/properties/`)
         if (!response.ok) throw new Error('Ошибка загрузки свойств')
         
         const propertiesArray = await response.json()
@@ -348,21 +405,75 @@ export default {
           }
         }
         
-        // Проверяем наличие необходимых свойств
-        const requiredProps = ['locked', 'outer_door_open', 'inner_door_open', 'pressure']
-        const missingProps = requiredProps.filter(name => !this.properties[name])
-        
-        if (missingProps.length > 0) {
-          this.addLog('warning', `Отсутствуют свойства: ${missingProps.join(', ')}`)
-          this.addLog('info', 'Создайте их через admin panel')
-        }
-        
         // Синхронизируем локальное состояние с сервером
         this.syncStateFromProperties()
         
       } catch (error) {
         throw new Error(`Ошибка загрузки свойств: ${error.message}`)
       }
+    },
+    
+    async ensureRequiredProperties() {
+      /**
+       * Проверяет наличие необходимых свойств и создаёт отсутствующие
+       */
+      const missingProps = REQUIRED_PROPERTIES.filter(prop => !this.properties[prop.name])
+      
+      if (missingProps.length === 0) {
+        this.addLog('info', 'Все необходимые свойства найдены')
+        return
+      }
+      
+      this.addLog('warning', `Отсутствуют свойства: ${missingProps.map(p => p.name).join(', ')}`)
+      this.creatingProperties = true
+      
+      for (const propDef of missingProps) {
+        try {
+          await this.createProperty(propDef)
+          this.addLog('success', `Свойство "${propDef.name}" создано`)
+        } catch (error) {
+          this.addLog('error', `Ошибка создания "${propDef.name}": ${error.message}`)
+        }
+      }
+      
+      // Перезагружаем свойства после создания
+      await this.loadProperties()
+      this.creatingProperties = false
+    },
+    
+    async createProperty(propDef) {
+      /**
+       * Создаёт новое свойство для объекта
+       * propDef: { name, type, defaultValue, description }
+       */
+      const body = {
+        object_id: this.currentObjectId,
+        name: propDef.name,
+        description: propDef.description,
+        property_type: propDef.type
+      }
+      
+      // Устанавливаем значение по умолчанию в зависимости от типа
+      if (propDef.type === 'boolean') {
+        body.value_boolean = propDef.defaultValue
+      } else if (propDef.type === 'number') {
+        body.value_number = propDef.defaultValue
+      } else if (propDef.type === 'text') {
+        body.value_text = propDef.defaultValue
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/properties/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || errorData.error || 'Ошибка создания свойства')
+      }
+      
+      return await response.json()
     },
     
     syncStateFromProperties() {
@@ -466,7 +577,7 @@ export default {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            object_id: this.objectId,
+            object_id: this.currentObjectId,
             properties: properties
           })
         })
@@ -788,8 +899,16 @@ export default {
   color: #00aa00;
   font-family: 'Courier New', monospace;
   font-size: 12px;
-  margin-bottom: 30px;
+  margin-bottom: 5px;
   opacity: 0.7;
+}
+
+.object-info {
+  color: #00aaff;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  margin-bottom: 25px;
+  opacity: 0.8;
 }
 
 /* Визуализация шлюза */
@@ -1191,6 +1310,35 @@ export default {
 
 .help-section.task-info h3 {
   color: #00aaff;
+}
+
+.help-section.creating-info {
+  border-color: #ffaa00;
+  background-color: rgba(150, 100, 0, 0.2);
+  animation: pulse-creating 1s ease-in-out infinite;
+}
+
+.help-section.creating-info h3 {
+  color: #ffaa00;
+}
+
+@keyframes pulse-creating {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.url-hint {
+  margin-top: 10px;
+  color: #00aaff;
+}
+
+.url-example {
+  font-family: 'Courier New', monospace;
+  background-color: rgba(0, 100, 150, 0.3);
+  padding: 5px 10px;
+  border-radius: 4px;
+  color: #00ffff;
+  margin-top: 5px;
 }
 
 /* Фоновые линии */

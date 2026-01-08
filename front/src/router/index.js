@@ -23,8 +23,14 @@ const routes = [
   },
   {
     path: '/airlock',
-    name: 'Airlock',
+    name: 'AirlockDefault',
     component: Airlock
+  },
+  {
+    path: '/airlock/:projectName/:objectId',
+    name: 'Airlock',
+    component: Airlock,
+    props: true
   }
 ]
 
