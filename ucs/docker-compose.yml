@@ -27,7 +27,7 @@ services:
     build:
       context: ..
       dockerfile: ucs/Dockerfile
-    command: celery -A ucs worker -l INFO
+    command: /ucs/.pyenv/versions/ucs/bin/celery -A ucs worker -l INFO
     working_dir: /ucs
     networks:
       - ucs
@@ -39,7 +39,7 @@ services:
     build:
       context: ..
       dockerfile: ucs/Dockerfile
-    command: celery -A ucs beat -l INFO
+    command: /ucs/.pyenv/versions/ucs/bin/celery -A ucs beat -l INFO
     working_dir: /ucs
     networks:
       - ucs
