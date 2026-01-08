@@ -2,16 +2,55 @@ version: "3"
 
 services:
   ucs:
-    build: .
+    build:
+      context: ..
+      dockerfile: ucs/Dockerfile
     command: /ucs/init.sh
     working_dir: /ucs
     expose:
       - 9100
     networks:
       - ucs
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    expose:
+      - 6379
+    networks:
+      - ucs
+    volumes:
+      - redis_data:/data
+
+  celery_worker:
+    build:
+      context: ..
+      dockerfile: ucs/Dockerfile
+    command: celery -A ucs worker -l INFO
+    working_dir: /ucs
+    networks:
+      - ucs
+    depends_on:
+      - redis
+      - ucs
+
+  celery_beat:
+    build:
+      context: ..
+      dockerfile: ucs/Dockerfile
+    command: celery -A ucs beat -l INFO
+    working_dir: /ucs
+    networks:
+      - ucs
+    depends_on:
+      - redis
+      - ucs
 
   nginx:
-    build: .
+    build:
+      context: ..
+      dockerfile: ucs/Dockerfile
     ports:
       - 8081:8081
     command: /usr/sbin/nginx -g 'daemon off;'
@@ -27,3 +66,4 @@ networks:
 volumes:
     postgres: { }
     pgadmin: { }
+    redis_data: { }
