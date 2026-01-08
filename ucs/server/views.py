@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from celery.result import AsyncResult
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, inline_serializer
+from rest_framework import serializers
 from .models import Object, Property
 from .serializers import ObjectSerializer, PropertySerializer
 from .tasks import change_value_gradually
@@ -208,30 +210,90 @@ class PropertyViewSet(viewsets.ModelViewSet):
             'properties': serializer.data
         })
 
+    @extend_schema(
+        summary="Постепенное изменение значения свойства",
+        description="""
+Запускает фоновую задачу Celery для постепенного изменения числового значения свойства.
+
+Значение изменяется пошагово от текущего до целевого с заданным интервалом.
+Работает только для свойств с типом "number".
+
+**Пример использования:**
+- Текущее значение: 0.0
+- Целевое значение: 100.0
+- Шаг: 10.0
+- Интервал: 0.5 секунды
+
+Значение будет изменяться: 0 → 10 → 20 → ... → 100, каждые 0.5 секунды.
+
+Для отслеживания прогресса используйте endpoint `GET /api/tasks/{task_id}/`.
+        """,
+        request=inline_serializer(
+            name='ChangeValueRequest',
+            fields={
+                'target_value': serializers.FloatField(
+                    help_text='Целевое значение, к которому будет изменяться свойство'
+                ),
+                'step': serializers.FloatField(
+                    help_text='Шаг изменения (должен быть положительным числом)'
+                ),
+                'interval': serializers.FloatField(
+                    required=False,
+                    default=1.0,
+                    help_text='Интервал между шагами изменения в секундах (по умолчанию 1.0)'
+                ),
+            }
+        ),
+        responses={
+            202: inline_serializer(
+                name='ChangeValueResponse',
+                fields={
+                    'status': serializers.CharField(help_text='Статус запуска задачи'),
+                    'task_id': serializers.CharField(help_text='ID задачи Celery для отслеживания прогресса'),
+                    'property_id': serializers.IntegerField(help_text='ID свойства'),
+                    'current_value': serializers.FloatField(help_text='Текущее значение свойства'),
+                    'target_value': serializers.FloatField(help_text='Целевое значение'),
+                    'step': serializers.FloatField(help_text='Шаг изменения'),
+                    'interval': serializers.FloatField(help_text='Интервал между шагами'),
+                }
+            ),
+            400: inline_serializer(
+                name='ChangeValueError',
+                fields={
+                    'error': serializers.CharField(help_text='Описание ошибки'),
+                }
+            ),
+        },
+        examples=[
+            OpenApiExample(
+                'Пример запроса',
+                value={
+                    'target_value': 100.0,
+                    'step': 5.0,
+                    'interval': 0.5
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
+                'Успешный ответ',
+                value={
+                    'status': 'started',
+                    'task_id': 'abc123-def456-ghi789',
+                    'property_id': 1,
+                    'current_value': 0.0,
+                    'target_value': 100.0,
+                    'step': 5.0,
+                    'interval': 0.5
+                },
+                response_only=True,
+                status_codes=['202'],
+            ),
+        ],
+    )
     @action(detail=True, methods=['post'], url_path='change-value')
     def change_value(self, request, pk=None):
         """
         Запускает задачу Celery для постепенного изменения числового значения свойства.
-        
-        POST /api/properties/{id}/change-value/
-        
-        Тело запроса:
-        {
-            "target_value": 100.0,  # Целевое значение (обязательно)
-            "step": 5.0,            # Шаг изменения (обязательно)
-            "interval": 1.0         # Интервал между шагами в секундах (опционально, по умолчанию 1.0)
-        }
-        
-        Возвращает:
-        {
-            "status": "started",
-            "task_id": "...",
-            "property_id": 1,
-            "current_value": 0.0,
-            "target_value": 100.0,
-            "step": 5.0,
-            "interval": 1.0
-        }
         """
         property_obj = self.get_object()
         
