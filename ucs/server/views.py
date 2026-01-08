@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from .models import Object, Property
 from .serializers import ObjectSerializer, PropertySerializer
+from .tasks import change_value_gradually
 
 
 class ObjectViewSet(viewsets.ModelViewSet):
@@ -86,3 +87,95 @@ class PropertyViewSet(viewsets.ModelViewSet):
             serializer.save(object=object)
         else:
             serializer.save()
+
+    @action(detail=True, methods=['post'], url_path='change-value')
+    def change_value(self, request, pk=None):
+        """
+        Запускает задачу Celery для постепенного изменения числового значения свойства.
+        
+        POST /api/properties/{id}/change-value/
+        
+        Тело запроса:
+        {
+            "target_value": 100.0,  # Целевое значение (обязательно)
+            "step": 5.0,            # Шаг изменения (обязательно)
+            "interval": 1.0         # Интервал между шагами в секундах (опционально, по умолчанию 1.0)
+        }
+        
+        Возвращает:
+        {
+            "status": "started",
+            "task_id": "...",
+            "property_id": 1,
+            "current_value": 0.0,
+            "target_value": 100.0,
+            "step": 5.0,
+            "interval": 1.0
+        }
+        """
+        property_obj = self.get_object()
+        
+        # Проверяем, что свойство имеет числовой тип
+        if property_obj.property_type != 'number':
+            return Response(
+                {'error': f'Свойство должно иметь тип "number", текущий тип: "{property_obj.property_type}"'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Получаем параметры из запроса
+        target_value = request.data.get('target_value')
+        step = request.data.get('step')
+        interval = request.data.get('interval', 1.0)
+        
+        # Валидация обязательных параметров
+        if target_value is None:
+            return Response(
+                {'error': 'Параметр "target_value" обязателен'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if step is None:
+            return Response(
+                {'error': 'Параметр "step" обязателен'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            target_value = float(target_value)
+            step = float(step)
+            interval = float(interval)
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'Параметры "target_value", "step" и "interval" должны быть числами'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if step <= 0:
+            return Response(
+                {'error': 'Параметр "step" должен быть положительным числом'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if interval <= 0:
+            return Response(
+                {'error': 'Параметр "interval" должен быть положительным числом'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Запускаем задачу Celery
+        task = change_value_gradually.delay(
+            property_id=property_obj.id,
+            target_value=target_value,
+            step=step,
+            interval=interval
+        )
+        
+        return Response({
+            'status': 'started',
+            'task_id': task.id,
+            'property_id': property_obj.id,
+            'current_value': property_obj.value_number or 0.0,
+            'target_value': target_value,
+            'step': step,
+            'interval': interval
+        }, status=status.HTTP_202_ACCEPTED)
