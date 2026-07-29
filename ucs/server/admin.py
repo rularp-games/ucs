@@ -29,14 +29,14 @@ class ObjectAdmin(admin.ModelAdmin):
 
 @admin.register(Property)
 class PropertyAdmin(admin.ModelAdmin):
-    list_display = ('name', 'project', 'property_type', 'get_value_display', 'created_at')
-    list_filter = ('property_type', 'project', 'created_at')
-    search_fields = ('name', 'description', 'project__name')
+    list_display = ('name', 'object', 'property_type', 'get_value_display', 'created_at')
+    list_filter = ('property_type', 'object', 'created_at')
+    search_fields = ('name', 'description', 'object__name')
     readonly_fields = ('created_at', 'updated_at')
-    autocomplete_fields = ('project',)
+    autocomplete_fields = ('object',)
     fieldsets = (
         ('Основная информация', {
-            'fields': ('project', 'name', 'description', 'property_type')
+            'fields': ('object', 'name', 'description', 'property_type')
         }),
         ('Значения', {
             'fields': ('value_number', 'value_boolean', 'value_text'),
