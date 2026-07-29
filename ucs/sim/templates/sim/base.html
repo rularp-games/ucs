@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Симулятор модели науки{% endblock %}</title>
+<style>
+  :root {
+    --bg: #14120f;
+    --panel: #1d1a16;
+    --panel-2: #262119;
+    --ink: #e8e2d6;
+    --dim: #9a9184;
+    --line: #37312a;
+    --accent: #d8a657;
+    --warn: #d97757;
+    --ok: #8fa876;
+    --lamp: #f0c674;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.55 ui-serif, Georgia, 'Times New Roman', serif;
+  }
+  a { color: var(--accent); }
+  header.top {
+    border-bottom: 1px solid var(--line);
+    padding: 14px 24px;
+    display: flex;
+    gap: 20px;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+  header.top h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+  header.top nav { margin-left: auto; display: flex; gap: 16px; font-size: 14px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .09em;
+       color: var(--dim); font-weight: 600; margin: 28px 0 12px; }
+  h2:first-child { margin-top: 0; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 24px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 18px 20px;
+    margin-bottom: 18px;
+  }
+  .panel.lamp { border-color: var(--lamp); box-shadow: 0 0 0 1px rgba(240,198,116,.18); }
+  .card-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .card-head .id { color: var(--accent); font-variant-numeric: tabular-nums; }
+  .card-head .title { font-size: 22px; font-weight: 600; }
+  .tag {
+    font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: .08em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 3px;
+    border: 1px solid var(--line); color: var(--dim);
+  }
+  .tag.lamp { color: var(--lamp); border-color: var(--lamp); }
+  .tag.dead { color: var(--warn); border-color: var(--warn); }
+  .tag.false { color: var(--warn); border-color: var(--warn); }
+  .summary { margin: 14px 0 0; }
+  .master {
+    margin-top: 14px; padding: 10px 14px; border-left: 2px solid var(--dim);
+    color: var(--dim); font-size: 14px; font-style: italic;
+  }
+  .variation { margin-top: 16px; }
+  .variation .vt { font-size: 13px; text-transform: uppercase; letter-spacing: .07em;
+                   color: var(--dim); margin-bottom: 6px; }
+  .variation ul { margin: 0; padding-left: 20px; }
+  ul.choices { list-style: none; margin: 0; padding: 0; }
+  ul.choices li { border-top: 1px solid var(--line); padding: 14px 0; }
+  ul.choices li:first-child { border-top: 0; }
+  .ckey { color: var(--accent); font-weight: 700; margin-right: 8px; }
+  .roles { color: var(--dim); font-size: 13px; margin-left: 6px; }
+  .dev { color: var(--dim); font-size: 13px; }
+  .marks { display: flex; flex-wrap: wrap; gap: 7px; }
+  .mark {
+    font-family: ui-monospace, monospace; font-size: 12px; letter-spacing: .05em;
+    padding: 3px 9px; border-radius: 3px; border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .mark.off { border-color: var(--line); color: var(--dim); opacity: .55; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase;
+       letter-spacing: .06em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { display: inline-block; height: 8px; background: var(--accent); border-radius: 2px;
+         min-width: 1px; vertical-align: middle; }
+  .bar.dim { background: var(--dim); }
+  .barcell { width: 190px; }
+  button, .btn {
+    font: inherit; font-size: 15px; cursor: pointer;
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; padding: 8px 16px;
+    text-decoration: none; display: inline-block;
+  }
+  button:hover, .btn:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  button.final { border-color: var(--ok); color: var(--ok); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  label.opt { display: block; padding: 6px 0; cursor: pointer; }
+  select, input[type=number], input[type=text] {
+    font: inherit; font-size: 14px; background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px; padding: 6px 9px;
+  }
+  .row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field span { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+                color: var(--dim); }
+  .note { color: var(--dim); font-size: 14px; }
+  .warn { color: var(--warn); }
+  .ok { color: var(--ok); }
+  .err { border: 1px solid var(--warn); color: var(--warn); border-radius: 4px;
+         padding: 10px 14px; margin-bottom: 18px; }
+  .log { font-family: ui-monospace, monospace; font-size: 12.5px; line-height: 1.65;
+         max-height: 340px; overflow-y: auto; }
+  .log div { padding: 2px 0; border-bottom: 1px solid rgba(55,49,42,.5); }
+  .log .k { color: var(--dim); display: inline-block; min-width: 44px; }
+  .path { font-family: ui-monospace, monospace; font-size: 12px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+  .kv dt { color: var(--dim); }
+  .kv dd { margin: 0; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>{% block heading %}Симулятор модели науки{% endblock %}</h1>
+  <nav>
+    <a href="{% url 'sim:index' %}">начало</a>
+    <a href="{% url 'sim:table' %}">стол</a>
+    <a href="{% url 'sim:report' %}">сводка</a>
+  </nav>
+</header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

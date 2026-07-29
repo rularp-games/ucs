@@ -1,0 +1,55 @@
+{% extends 'sim/base.html' %}
+
+{% block content %}
+<div class="panel">
+  <p class="note" style="margin-top:0">
+    Симулятор модели науки для игры «В финале Джон умрёт». Механика дерева
+    прозрений описана данными, движок применяет правила: метки, лампы, гости,
+    ходы Джона/Джейн, открытие финалов. Полные тексты карточек остаются в
+    исходном документе модели.
+  </p>
+</div>
+
+<h2>Деревья</h2>
+{% for tree in trees %}
+<div class="panel">
+  <div class="card-head">
+    <span class="title">{{ tree.title }}</span>
+    <span class="tag">{{ tree.name }}</span>
+  </div>
+  <dl class="kv" style="margin-top:14px">
+    <dt>карточек</dt><dd>{{ tree.nodes }} узлов + {{ tree.finals }} финала</dd>
+    <dt>меток</dt><dd>{{ tree.marks }}</dd>
+    <dt>ламп</dt><dd>{{ tree.lamps }}</dd>
+    <dt>источник</dt><dd>{{ tree.source }}</dd>
+  </dl>
+  <div class="row" style="margin-top:18px">
+    <a class="btn" href="{% url 'sim:table' %}?tree={{ tree.name }}">Вести группу за столом</a>
+    <a class="btn" href="{% url 'sim:report' %}?tree={{ tree.name }}">Сводка по прогонам</a>
+  </div>
+</div>
+{% empty %}
+<div class="panel"><p class="warn">В каталоге sim/data нет ни одного дерева.</p></div>
+{% endfor %}
+
+<h2>Два режима</h2>
+<div class="panel">
+  <p><b>Стол</b> — один прогон под управлением мастера. Показывает текущую
+  карточку, метки группы, зажжённую лампу и то, что гость может унести; считает
+  ходы Джона/Джейн и следит за ограничениями на их расход; в третьем акте
+  показывает, какие финалы группе доступны и почему.</p>
+  <p><b>Сводка</b> — тысячи прогонов со случайными решениями. Отвечает на
+  вопросы, которые за столом не проверить: с какими метками группы доходят до
+  финала, какие финалы реально достижимы, как часто срабатывает правило нижней
+  границы, какие карточки почти никто не видит.</p>
+</div>
+
+<h2>Из командной строки</h2>
+<div class="panel">
+  <p class="note">Те же прогоны без браузера:</p>
+  <pre class="path">python3 manage.py sim_run
+python3 manage.py sim_run --iterations 50000 --strategy counter
+python3 manage.py sim_run --compare
+python3 manage.py sim_run --validate-only</pre>
+</div>
+{% endblock %}

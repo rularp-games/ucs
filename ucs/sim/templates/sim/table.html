@@ -1,0 +1,387 @@
+{% extends 'sim/base.html' %}
+{% load sim_extras %}
+
+{% block title %}Стол — {{ tree.title }}{% endblock %}
+{% block heading %}Стол: {{ tree.title }}{% endblock %}
+
+{% block content %}
+
+{% if fatal %}
+  <div class="err">{{ fatal }}</div>
+  <a class="btn" href="{% url 'sim:table' %}">Начать прогон заново</a>
+
+{% else %}
+
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+<div class="grid">
+<div>
+
+{% if state.finished %}
+  {# ------------------------------------------------------------- итог прогона #}
+  <div class="panel">
+    <div class="card-head">
+      <span class="id">{{ state.final }}</span>
+      <span class="title">{{ final.title }}</span>
+      <span class="tag">финал</span>
+    </div>
+    <p class="summary">{{ final.summary }}</p>
+    {% if state.final == 'F4' %}
+      <div class="master">
+        {% if 'ГРАВИТАЦИЯ' in marks_held %}
+          С меткой ГРАВИТАЦИЯ опровержение физическое: тема закрывается для всех,
+          две другие группы прочтут и остановятся.
+        {% else %}
+          Только с меткой СОМНЕНИЕ опровержение формальное: тема закрывается для
+          вас одних. Остальные продолжат, и вы это понимаете, когда подписываете.
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <h2>Пройденный путь</h2>
+  <div class="panel">
+    <p class="path">{% for node_id in path %}{{ node_id }}{% if not forloop.last %} → {% endif %}{% endfor %}</p>
+  </div>
+
+  <form method="post" action="{% url 'sim:restart' %}">
+    {% csrf_token %}
+    <input type="hidden" name="tree" value="{{ tree.name }}">
+    <button class="primary" type="submit">Новый прогон</button>
+  </form>
+
+{% else %}
+  {# --------------------------------------------------------------- карточка #}
+  <div class="panel{% if node.lamp %} lamp{% endif %}">
+    <div class="card-head">
+      <span class="id">{{ node.id }}</span>
+      <span class="title">{{ node.title }}</span>
+      {% if node.lamp %}<span class="tag lamp">лампа</span>{% endif %}
+      {% if node.kind == 'dead_end' %}<span class="tag dead">тупик</span>{% endif %}
+      {% if node.kind == 'false_exit' %}<span class="tag false">ложный выход</span>{% endif %}
+      {% if node.false_flash %}<span class="tag dead">ложная вспышка</span>{% endif %}
+      <span class="tag">акт {{ node.act }} · {{ act.title }}</span>
+      <span class="tag">{{ node.minutes }} мин</span>
+    </div>
+
+    <p class="summary">{{ node.summary }}</p>
+
+    {% for title, rows in variations %}
+      <div class="variation">
+        <div class="vt">{{ title }}</div>
+        <ul>{% for row in rows %}<li>{{ row }}</li>{% endfor %}</ul>
+      </div>
+    {% endfor %}
+
+    {% if node.master_note %}<div class="master">мастеру: {{ node.master_note }}</div>{% endif %}
+    {% if player_absent %}
+      <div class="master warn">
+        Группа проходит этот узел неполным составом: {{ state.absent_player }}
+        выбыл{% if state.absent_is_john %} — ход Джона/Джейн здесь потратить нельзя{% endif %}.
+      </div>
+    {% endif %}
+  </div>
+
+  {# ------------------------------------------------------------ сцена гостя #}
+  {% if awaiting_guest %}
+  <h2>Гость</h2>
+  <div class="panel lamp">
+    <p style="margin-top:0">
+      Лампа зажжена, приходит гость. Цель — <b>{{ node.guest.item }}</b>.
+    </p>
+
+    {% if guest_takes_person %}
+      <p class="note">{{ node.guest.blocked_note }}</p>
+      <p><b>Бумагу унести не удалось.</b> {{ node.guest.if_blocked_note }}</p>
+    {% else %}
+      <p class="note">
+        {% if node.guest.mode == 'copy' %}{{ node.guest.note }}
+        {% elif node.guest.mode == 'take_first_mark' %}{{ node.guest.note }}
+          Порядок: {{ node.guest.mark_order|join:' → ' }}.
+        {% else %}
+          Уносит:
+          {% if node.guest.marks_remove %}−{{ node.guest.marks_remove|join:', −' }}{% endif %}
+          {% if node.guest.closes_finals %}закрывает финал {{ node.guest.closes_finals|join:', ' }}{% endif %}
+          {% if node.guest.disables_choice %}снимает вариант {{ node.guest.disables_choice }}{% endif %}
+          {% if node.guest.note %}<br>{{ node.guest.note }}{% endif %}
+        {% endif %}
+      </p>
+    {% endif %}
+
+    {% if node.guest.master_note %}
+      <div class="master">мастеру: {{ node.guest.master_note }}</div>
+    {% endif %}
+
+    <form method="post" style="margin-top:18px">
+      {% csrf_token %}
+      <input type="hidden" name="state" value="{{ token }}">
+      <input type="hidden" name="tree" value="{{ tree.name }}">
+      <input type="hidden" name="guest_probability" value="{{ guest_probability }}">
+      <input type="hidden" name="action" value="guest">
+
+      {% if guest_takes_person %}
+        <div class="field" style="margin-bottom:14px">
+          <span>Кого гость увёл</span>
+          <select name="john_taken">
+            <option value="0">одного из троих</option>
+            <option value="1">Джона/Джейн — ход в следующем узле недоступен</option>
+          </select>
+        </div>
+      {% endif %}
+
+      <button type="submit" name="counter" value="0">Гость сделал своё дело</button>
+
+      {% if can_counter %}
+        {% if counter_needs_substitute %}
+          <div class="panel" style="margin:16px 0 0; background:var(--panel-2)">
+            <p class="note" style="margin-top:0">
+              Метка «{{ node.counter.marks_add|join:', ' }}» у группы уже есть, второй раз
+              она не появится.
+              {% if is_last_lamp %}
+                Это последняя лампа игры: обе обычные замены пустые, поэтому группа
+                берёт любую метку, которой у неё нет.
+              {% else %}
+                Группа выбирает замену.
+              {% endif %}
+            </p>
+            {% for option in substitute_options %}
+              <label class="opt">
+                <input type="radio" name="substitute" value="{{ option }}"
+                       {% if forloop.first %}checked{% endif %}>
+                {% if option == 'skip_next_guest' %}
+                  на следующей лампе лампа зажигается, но гость не приходит — один раз
+                {% elif option == 'return_move' %}
+                  ход возвращается неистраченным (гостя он всё равно уже остановил)
+                {% else %}
+                  группа берёт любую метку, которой у неё нет
+                {% endif %}
+              </label>
+            {% endfor %}
+            {% if substitute_any_mark in substitute_options %}
+              <div class="field" style="margin-top:10px">
+                <span>Какую метку берёт группа</span>
+                <select name="chosen_mark">
+                  {% for mark in marks_missing %}<option value="{{ mark }}">{{ mark }}</option>{% endfor %}
+                </select>
+              </div>
+            {% endif %}
+          </div>
+        {% else %}
+          <p class="note" style="margin:14px 0 0">
+            При противодействии группа получает <b>+{{ node.counter.marks_add|join:', +' }}</b>.
+            {% if node.counter.note %}{{ node.counter.note }}{% endif %}
+          </p>
+        {% endif %}
+        <button class="primary" type="submit" name="counter" value="1"
+                style="margin-top:12px">
+          Ход Джона/Джейн: противодействовать
+        </button>
+      {% else %}
+        <p class="note" style="margin:14px 0 0">
+          Противодействовать нельзя:
+          {% if not can_john_move %}
+            {% if state.john_moves_left == 0 %}ходы Джона/Джейн израсходованы{% elif player_absent and state.absent_is_john %}Джона/Джейн увёл гость{% else %}ход был потрачен в предыдущем узле{% endif %}.
+          {% else %}
+            у гостя нет доступных действий — ход не объявляется и не тратится.
+          {% endif %}
+        </p>
+      {% endif %}
+    </form>
+  </div>
+  {% endif %}
+
+  {# ---------------------------------------------------------------- выбор #}
+  {% if awaiting_choice %}
+  <h2>{% if has_choices %}Выбор{% else %}Дальше{% endif %}</h2>
+  <div class="panel">
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="state" value="{{ token }}">
+      <input type="hidden" name="tree" value="{{ tree.name }}">
+      <input type="hidden" name="guest_probability" value="{{ guest_probability }}">
+
+      {% if has_choices %}
+        <input type="hidden" name="action" value="choice">
+        <ul class="choices">
+          {% for choice in choices %}
+          <li>
+            <label class="opt">
+              <input type="radio" name="choice" value="{{ choice.key }}"
+                     {% if forloop.first %}checked{% endif %}>
+              <span class="ckey">{{ choice.key }}</span>{{ choice.text }}
+              <span class="roles">({% for role in choice.roles %}{{ role }}{% if not forloop.last %}, {% endif %}{% endfor %})</span>
+            </label>
+            <div class="dev" style="padding-left:26px">
+              {% if choice.development %}{{ choice.development }} · {% endif %}
+              {% if choice.to %}→ {{ choice.to }}{% endif %}
+              {% if choice.marks_add %} · +{{ choice.marks_add|join:', +' }}{% if choice.marks_reason %} ({{ choice.marks_reason }}){% endif %}{% endif %}
+              {% if choice.key in slow_targets %} · замедлить: {{ slow_targets|dictkey:choice.key }}{% endif %}
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+
+        {% if disabled_choices %}
+          <p class="note warn">
+            Гость снял вариант {{ disabled_choices|join:', ' }} — сжимать руками больше нечего.
+          </p>
+        {% endif %}
+
+        <div class="row" style="margin-top:18px">
+          <button class="primary" type="submit" name="john_slows" value="0">Принять выбор</button>
+          {% if can_slow %}
+            <button type="submit" name="john_slows" value="1">
+              Ход Джона/Джейн: замедлить
+            </button>
+          {% endif %}
+        </div>
+        {% if can_slow %}
+          <p class="note" style="margin:12px 0 0">
+            «Замедлить»: выбранная ветка не сработала, группа обязана взять
+            {% if node.id == '3.1' %}тупик 3.2d — в третьем акте это вычёркивает концовки{% else %}тупиковую ветку узла, а если тупика нет — соседнюю по списку{% endif %}.
+          </p>
+        {% elif node.slow_forbidden %}
+          <p class="note">«Замедлить» в этом узле нельзя: {{ node.slow_forbidden_reason }}</p>
+        {% endif %}
+
+      {% else %}
+        <input type="hidden" name="action" value="advance">
+        <p style="margin-top:0">Блока выбора нет: карточка ведёт в {{ node.next }}.</p>
+        <button class="primary" type="submit">Перейти к {{ node.next }}</button>
+      {% endif %}
+    </form>
+  </div>
+  {% endif %}
+
+  {# ---------------------------------------------------------- выбор финала #}
+  {% if awaiting_final %}
+  <h2>Финал</h2>
+  <div class="panel">
+    <p class="note" style="margin-top:0">
+      Список на карточке — то, к чему она подталкивает. Доступен любой финал,
+      открытый метками группы, кроме закрытых явным указанием.
+      {% if state.floor_rule_fired %}
+        <br><b class="ok">Сработало правило нижней границы:</b> доступен был один
+        финал, группа получила метку и второй открылся.
+      {% endif %}
+    </p>
+
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="state" value="{{ token }}">
+      <input type="hidden" name="tree" value="{{ tree.name }}">
+      <input type="hidden" name="guest_probability" value="{{ guest_probability }}">
+      <input type="hidden" name="action" value="final">
+      <ul class="choices">
+        {% for status in finals %}
+        <li>
+          <label class="opt" {% if not status.available %}style="opacity:.45"{% endif %}>
+            <input type="radio" name="final" value="{{ status.key }}"
+                   {% if not status.available %}disabled{% endif %}>
+            <span class="ckey">{{ status.key }}</span>{{ status.title }}
+            {% if status.suggested %}<span class="tag">на карточке</span>{% endif %}
+          </label>
+          <div class="dev" style="padding-left:26px">{{ status.reason }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+      <button class="final" type="submit" style="margin-top:16px">Взять финал</button>
+      <p class="note" style="margin:14px 0 0">
+        Финал выбирается голосованием группы. При равенстве голосов решает
+        Джон/Джейн — независимо от того, за что голосовал сам. Это единственное
+        решение в игре, которое он принимает единолично.
+      </p>
+    </form>
+  </div>
+  {% endif %}
+
+{% endif %}
+</div>
+
+{# ------------------------------------------------------------- боковая панель #}
+<div>
+  <div class="panel">
+    <h2 style="margin-top:0">Метки группы</h2>
+    {% if marks_held %}
+      <div class="marks">
+        {% for mark in marks_held %}<span class="mark" title="{{ mark_descriptions|dictkey:mark }}">{{ mark }}</span>{% endfor %}
+      </div>
+    {% else %}
+      <p class="note" style="margin:0">Меток нет.</p>
+    {% endif %}
+    {% if marks_missing %}
+      <p class="note" style="margin:14px 0 6px">не нажито:</p>
+      <div class="marks">
+        {% for mark in marks_missing %}<span class="mark off" title="{{ mark_descriptions|dictkey:mark }}">{{ mark }}</span>{% endfor %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">Ходы Джона/Джейн</h2>
+    <p style="margin:0">
+      Осталось <b>{{ john_moves_left }}</b> из 3.
+      {% if not state.finished %}
+        <br><span class="note">
+          {% if can_john_move %}Ход в этом узле доступен.{% else %}Ход в этом узле недоступен.{% endif %}
+        </span>
+      {% endif %}
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">Финалы</h2>
+    <table>
+      {% for status in finals %}
+      <tr>
+        <td>{{ status.key }} {{ status.title }}</td>
+        <td class="num">{% if status.available %}<span class="ok">да</span>{% else %}<span class="note">нет</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  {% if state.flags %}
+  <div class="panel">
+    <h2 style="margin-top:0">На листе группы</h2>
+    <ul style="margin:0; padding-left:20px">
+      {% for flag in state.flags %}
+        <li>{% if flag == 'number_left_room' %}Число ушло из комнаты{% elif flag == 'letter_sent' %}Письмо в редакцию ушло{% else %}{{ flag }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="panel">
+    <h2 style="margin-top:0">Журнал</h2>
+    <div class="log">
+      {% for event in log %}
+        <div><span class="k">{{ event.node }}</span> {{ event.text }}</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">Прогон</h2>
+    <form method="get">
+      <input type="hidden" name="tree" value="{{ tree.name }}">
+      <input type="hidden" name="state" value="{{ token }}">
+      <div class="field">
+        <span>Вероятность прихода гостя</span>
+        <input type="number" name="guest_probability" min="0" max="1" step="0.05"
+               value="{{ guest_probability }}">
+      </div>
+      <button type="submit" style="margin-top:12px">Применить</button>
+    </form>
+    <p class="note">Модель предполагает 1.0: гость приходит на каждую лампу.</p>
+    <form method="post" action="{% url 'sim:restart' %}">
+      {% csrf_token %}
+      <input type="hidden" name="tree" value="{{ tree.name }}">
+      <button type="submit">Начать заново</button>
+    </form>
+  </div>
+</div>
+</div>
+
+{% endif %}
+{% endblock %}

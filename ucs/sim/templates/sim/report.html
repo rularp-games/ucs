@@ -1,0 +1,191 @@
+{% extends 'sim/base.html' %}
+{% load sim_extras %}
+
+{% block title %}Сводка — {{ tree.title }}{% endblock %}
+{% block heading %}Сводка: {{ tree.title }}{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <form method="get" class="row">
+    <input type="hidden" name="tree" value="{{ tree.name }}">
+    <div class="field">
+      <span>Стратегия</span>
+      <select name="strategy">
+        {% for name in strategies %}
+          <option value="{{ name }}" {% if name == strategy %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <span>Прогонов</span>
+      <input type="number" name="iterations" min="1" max="50000" step="500" value="{{ iterations }}">
+    </div>
+    <div class="field">
+      <span>Гость на лампе</span>
+      <input type="number" name="guest_probability" min="0" max="1" step="0.05" value="{{ guest_probability }}">
+    </div>
+    <div class="field">
+      <span>Seed</span>
+      <input type="number" name="seed" value="{{ seed|default_if_none:'' }}">
+    </div>
+    <button class="primary" type="submit">Прогнать</button>
+  </form>
+  <p class="note" style="margin-bottom:0">{{ report.strategy_description }}</p>
+</div>
+
+{% if report.warnings %}
+<div class="panel" style="border-color:var(--warn)">
+  <h2 style="margin-top:0" class="warn">Расхождения</h2>
+  <ul style="margin:0; padding-left:20px">
+    {% for warning in report.warnings %}<li class="warn">{{ warning }}</li>{% endfor %}
+  </ul>
+  <p class="note" style="margin-bottom:0">
+    У детерминированных стратегий часть расхождений ожидаема: группа, всегда
+    берущая первый вариант, физически не может увидеть остальные карточки.
+  </p>
+</div>
+{% endif %}
+
+<h2>Финалы</h2>
+<div class="panel">
+  <table>
+    <tr>
+      <th>Финал</th><th>Открыт меткой</th>
+      <th class="num">Доступен</th><th class="barcell"></th>
+      <th class="num">Взят</th><th class="num">Закрыт карточкой</th>
+    </tr>
+    {% for row in finals_rows %}
+    <tr>
+      <td><b>{{ row.key }}</b> {{ row.title }}</td>
+      <td class="note">{{ row.opened_by }}</td>
+      <td class="num">{{ row.available_share|percent }}</td>
+      <td><span class="bar" style="width:{{ row.available_share|barpx }}px"></span></td>
+      <td class="num">{{ row.chosen_share|percent }}</td>
+      <td class="num note">{% if row.closed_share %}{{ row.closed_share|percent }}{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="grid">
+<div>
+  <h2>Метки к моменту финала</h2>
+  <div class="panel">
+    <table>
+      {% for row in marks_rows %}
+      <tr>
+        <td title="{{ row.description }}">{{ row.mark }}</td>
+        <td class="num">{{ row.share|percent }}</td>
+        <td><span class="bar" style="width:{{ row.share|barpx }}px"></span></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <h2>Сколько меток донесли</h2>
+  <div class="panel">
+    <table>
+      {% for row in mark_count_rows %}
+      <tr>
+        <td>{{ row.label }} шт.</td>
+        <td class="num">{{ row.share|percent }}</td>
+        <td><span class="bar dim" style="width:{{ row.share|barpx }}px"></span></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<div>
+  <h2>Сколько финалов было доступно</h2>
+  <div class="panel">
+    <table>
+      {% for row in available_rows %}
+      <tr>
+        <td>{{ row.label }}</td>
+        <td class="num">{{ row.share|percent }}</td>
+        <td><span class="bar" style="width:{{ row.share|barpx }}px"></span></td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="note" style="margin-bottom:0">
+      Правило нижней границы сработало в <b>{{ floor_share|percent }}</b> прогонов.
+      Строки «1 финал» быть не должно: правило обязано открыть второй.
+    </p>
+  </div>
+
+  <h2>Ходы Джона/Джейн</h2>
+  <div class="panel">
+    <table>
+      {% for row in john_rows %}
+      <tr>
+        <td>{{ row.label }} из 3</td>
+        <td class="num">{{ row.share|percent }}</td>
+        <td><span class="bar dim" style="width:{{ row.share|barpx }}px"></span></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  {% if flags_rows %}
+  <h2>Отметки на листе группы</h2>
+  <div class="panel">
+    <table>
+      {% for row in flags_rows %}
+      <tr>
+        <td>{% if row.label == 'number_left_room' %}число ушло из комнаты{% elif row.label == 'letter_sent' %}письмо в редакцию ушло{% else %}{{ row.label }}{% endif %}</td>
+        <td class="num">{{ row.share|percent }}</td>
+        <td><span class="bar dim" style="width:{{ row.share|barpx }}px"></span></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+</div>
+</div>
+
+<h2>Карточки</h2>
+<div class="panel">
+  <table>
+    <tr>
+      <th>Карточка</th><th>Акт</th><th>Мин</th><th></th>
+      <th class="num">Доля прогонов</th><th class="barcell"></th>
+    </tr>
+    {% for row in nodes_rows %}
+    <tr>
+      <td><span class="id" style="color:var(--accent)">{{ row.id }}</span> {{ row.title }}</td>
+      <td class="note">{{ row.act }}</td>
+      <td class="note num">{{ row.minutes }}</td>
+      <td>
+        {% if row.lamp %}<span class="tag lamp">лампа</span>{% endif %}
+        {% if row.kind %}<span class="tag dead">{{ row.kind }}</span>{% endif %}
+      </td>
+      <td class="num">{{ row.share|percent }}</td>
+      <td><span class="bar" style="width:{{ row.share|barpx }}px"></span></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<h2>Частые пути</h2>
+<div class="panel">
+  <table>
+    {% for row in top_paths %}
+    <tr>
+      <td class="num" style="width:70px">{{ row.share|percent }}</td>
+      <td class="path">{{ row.path }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note" style="margin-bottom:0">Всего различных путей: {{ path_total }}.</p>
+</div>
+
+<h2>Журнал первого прогона</h2>
+<div class="panel">
+  <div class="log" style="max-height:none">
+    {% for row in report.sample_log %}<div>{{ row }}</div>{% endfor %}
+  </div>
+</div>
+
+{% endblock %}
