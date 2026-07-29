@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'django_celery_beat',
     'server',
+    'sim',
 ]
 
 MIDDLEWARE = [
