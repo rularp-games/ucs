@@ -14,9 +14,11 @@ import random
 from django.http import Http404
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils.safestring import mark_safe
 from django.views.decorators.http import require_http_methods
 
 from .codec import StateCodec, decode, encode
+from .diagram import build_layout, render_mermaid, render_svg
 from .engine import (
     SUBSTITUTE_ANY_MARK,
     Phase,
@@ -38,6 +40,40 @@ def index(request):
         {
             'trees': [_tree_card(name) for name in available_trees()],
             'strategies': sorted(STRATEGIES),
+        },
+    )
+
+
+# ------------------------------------------------------------------------- схема
+
+
+def tree(request):
+    """Схема дерева целиком: карточки, лампы, тупики, финалы."""
+    tree_name = request.GET.get('tree') or None
+    try:
+        target = get_tree(tree_name) if tree_name else get_tree()
+    except TreeError as error:
+        raise Http404(str(error)) from error
+
+    layout = build_layout(target)
+    return render(
+        request,
+        'sim/tree.html',
+        {
+            'tree': target,
+            'svg': mark_safe(render_svg(layout, f'Схема дерева: {target.title}')),
+            'mermaid': [
+                (act, target.acts.get(act, {}).get('title', ''), render_mermaid(target, act))
+                for act in sorted(target.acts)
+            ],
+            'finals': [
+                {
+                    'key': key,
+                    'title': final.title,
+                    'opened_by': ' или '.join(final.opened_by) or 'всегда',
+                }
+                for key, final in target.finals.items()
+            ],
         },
     )
 
@@ -141,6 +177,8 @@ def _table_context(sim: Simulation, tree, error_message: str = '') -> dict:
         'phase': state.phase.value,
     }
 
+    context['diagram'] = _state_diagram(sim, tree)
+
     if state.finished:
         context['final'] = tree.final(state.final)
         context['path'] = state.visited
@@ -172,6 +210,26 @@ def _table_context(sim: Simulation, tree, error_message: str = '') -> dict:
         }
     )
     return context
+
+
+def _state_diagram(sim: Simulation, target) -> str:
+    """Схема текущего акта с подсвеченным путём группы.
+
+    Показывается акт, в котором группа находится, а не всё дерево: за столом
+    нужно видеть, откуда пришли и куда можно уйти, а не общую карту.
+    """
+    state = sim.state
+    node_id = state.node or (state.visited[-1] if state.visited else None)
+    if node_id is None:
+        return ''
+    act = target.node(node_id).act
+    available = None
+    if act == max(n.act for n in target.nodes.values()):
+        available = tuple(sim.available_finals())
+    layout = build_layout(
+        target, acts=(act,), state=state, available_finals=available
+    )
+    return mark_safe(render_svg(layout, f'Схема акта {act}'))
 
 
 def _slow_targets(sim: Simulation) -> dict[str, str]:

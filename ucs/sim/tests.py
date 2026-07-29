@@ -525,6 +525,141 @@ class StateTests(unittest.TestCase):
         self.assertEqual(resumed.state.marks, sim.state.marks)
 
 
+class DiagramTests(unittest.TestCase):
+    """Схема строится из дерева, поэтому проверяем соответствие структуре."""
+
+    def test_layout_covers_every_card(self):
+        from .diagram import build_layout
+
+        tree = get_tree()
+        layout = build_layout(tree)
+        self.assertEqual(len(layout.boxes), len(tree.nodes) + len(tree.finals))
+        self.assertEqual(len(layout.bands), 4)  # три акта плюс финалы
+
+    def test_layout_boxes_do_not_overlap(self):
+        from .diagram import NODE_H, NODE_W, build_layout
+
+        layout = build_layout(get_tree())
+        boxes = list(layout.boxes.values())
+        for i, a in enumerate(boxes):
+            for b in boxes[i + 1 :]:
+                overlap_x = a.x < b.x + NODE_W and b.x < a.x + NODE_W
+                overlap_y = a.y < b.y + NODE_H and b.y < a.y + NODE_H
+                self.assertFalse(overlap_x and overlap_y, f'{a.key} и {b.key}')
+
+    def test_edges_match_tree_transitions(self):
+        from .diagram import build_layout
+
+        tree = get_tree()
+        layout = build_layout(tree)
+        expected = set()
+        for node in tree.nodes.values():
+            targets = (
+                [c.key for c in node.choices]
+                if node.final_choice
+                else tree.successors(node)
+            )
+            expected.update((node.id, t) for t in targets)
+        self.assertEqual({(e.src, e.dst) for e in layout.edges}, expected)
+
+    def test_single_act_layout_has_no_finals(self):
+        from .diagram import build_layout
+
+        layout = build_layout(get_tree(), acts=(1,))
+        self.assertEqual(len(layout.boxes), 8)
+        self.assertNotIn('F3', layout.boxes)
+
+    def test_walked_path_is_highlighted(self):
+        from .diagram import build_layout
+
+        sim = walk(make_sim(), 'A', 'B')  # 1.1 -> 1.2a -> 1.3b
+        layout = build_layout(get_tree(), acts=(1,), state=sim.state)
+        active = {(e.src, e.dst) for e in layout.edges if e.active}
+        self.assertEqual(active, {('1.1', '1.2a'), ('1.2a', '1.3b')})
+        self.assertTrue(layout.boxes['1.3b'].current)
+        self.assertTrue(layout.boxes['1.1'].visited)
+        self.assertFalse(layout.boxes['1.2b'].visited)
+
+    def test_unavailable_finals_are_dimmed(self):
+        from .diagram import build_layout
+
+        layout = build_layout(
+            get_tree(), acts=(3,), available_finals=('F3', 'F4')
+        )
+        self.assertFalse(layout.boxes['F3'].unavailable)
+        self.assertTrue(layout.boxes['F1'].unavailable)
+
+    def test_svg_is_well_formed_xml(self):
+        import xml.dom.minidom
+
+        from .diagram import build_layout, render_svg
+
+        svg = render_svg(build_layout(get_tree()))
+        xml.dom.minidom.parseString(svg)  # бросит, если разметка битая
+        self.assertIn('Загородный дом', svg)
+
+    def test_svg_escapes_card_titles(self):
+        """Заголовки попадают в разметку — их нужно экранировать."""
+        import xml.dom.minidom
+
+        from .diagram import build_layout, render_svg
+
+        tree = get_tree()
+        layout = build_layout(tree)
+        layout.boxes['3.1'].line2 = 'A & B <c>'
+        layout.boxes['3.1'].title = 'кавычка " и <тег>'
+        svg = render_svg(layout)
+        xml.dom.minidom.parseString(svg)
+        self.assertNotIn('<c>', svg)
+        self.assertIn('&amp;', svg)
+
+    def test_mermaid_matches_the_model_document(self):
+        """Сгенерированный Mermaid для акта 3 должен повторять документ модели."""
+        from .diagram import render_mermaid
+
+        source = render_mermaid(get_tree(), 3)
+        self.assertTrue(source.startswith('flowchart TD'))
+        for line in (
+            'N3_1["3.1 Загородный дом<br>ЛАМПА"]',
+            'N3_2d["3.2d Ошибка в третьем знаке<br>ТУПИК, ЛАМПА"]',
+            'N3_2b --> F4',
+            'N3_2d --> F3',
+        ):
+            self.assertIn(line, source)
+        self.assertNotIn('N3_2d --> F1', source)
+
+    def test_mermaid_has_no_numeric_html_entities(self):
+        """Числовые HTML-сущности Mermaid не декодирует — их быть не должно."""
+        import re
+
+        from .diagram import render_mermaid
+
+        for act in (1, 2, 3):
+            source = render_mermaid(get_tree(), act)
+            self.assertIsNone(re.search(r'&#x?[0-9a-fA-F]+;', source), f'акт {act}')
+
+    def test_mermaid_ids_are_parser_safe(self):
+        """Точки в идентификаторах Mermaid ломают разбор — их быть не должно."""
+        import re
+
+        from .diagram import render_mermaid
+
+        for act in (1, 2, 3):
+            for line in render_mermaid(get_tree(), act).splitlines():
+                # Идентификатор — первый токен строки, до подписи или стрелки
+                for node_id in re.findall(r'^ {4}([A-Za-z_][A-Za-z0-9_]*)', line):
+                    self.assertNotIn('.', node_id)
+                    self.assertRegex(node_id, r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+    def test_non_final_acts_point_at_the_next_one(self):
+        from .diagram import render_mermaid
+
+        for act in (1, 2):
+            source = render_mermaid(get_tree(), act)
+            self.assertIn(f'NEXT["к {act + 1}.1"]', source)
+            self.assertIn('--> NEXT', source)
+
+
 class BatchTests(unittest.TestCase):
     def test_every_run_reaches_a_final(self):
         tree = get_tree()

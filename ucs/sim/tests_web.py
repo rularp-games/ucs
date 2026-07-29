@@ -33,6 +33,33 @@ class IndexTests(SimpleTestCase):
         self.assertContains(response, 'false_vacuum')
 
 
+class TreePageTests(SimpleTestCase):
+    def test_tree_page_renders_the_diagram(self):
+        response = self.client.get(reverse('sim:tree'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<svg class="tree"')
+        self.assertContains(response, 'Загородный дом')
+        self.assertContains(response, 'Акт 1 — Вопрос')
+
+    def test_tree_page_shows_mermaid_source(self):
+        response = self.client.get(reverse('sim:tree'))
+        self.assertContains(response, 'flowchart TD')
+        self.assertContains(response, 'N3_2b --&gt; F4')
+
+    def test_svg_is_inline_without_external_assets(self):
+        """В кластере нет интернета: картинка не должна тянуть ничего извне."""
+        html = self.client.get(reverse('sim:tree')).content.decode()
+        svg = html[html.index('<svg class="tree"') : html.index('</svg>')]
+        # Объявление пространства имён — не загрузка ресурса, его исключаем
+        svg = svg.replace('xmlns="http://www.w3.org/2000/svg"', '')
+        for forbidden in ('<script', 'http://', 'https://', '<image', 'xlink:href'):
+            self.assertNotIn(forbidden, svg, forbidden)
+
+    def test_unknown_tree_gives_404(self):
+        response = self.client.get(reverse('sim:tree'), {'tree': 'нет-такого'})
+        self.assertEqual(response.status_code, 404)
+
+
 class TableTests(SimpleTestCase):
     def setUp(self):
         self.url = reverse('sim:table')
@@ -111,6 +138,42 @@ class TableTests(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'недоступен')
         self.assertEqual(decode(token_of(response)).node, before.node)
+
+    def test_table_shows_current_act_with_highlight(self):
+        response = self.post(self.start(), action='choice', choice='A')
+        self.assertContains(response, 'Где группа сейчас')
+        self.assertContains(response, '<svg class="tree"')
+        html = response.content.decode()
+        svg = html[html.index('<svg class="tree"') : html.index('</svg>')]
+        # Текущая карточка помечена — она же и пройденная, класс составной
+        self.assertRegex(svg, r'class="n[^"]*\bnow\b[^"]*"')
+        self.assertIn('class="e on"', svg)
+        # Показывается только текущий акт
+        self.assertIn('Баунс', svg)
+        self.assertNotIn('Загородный дом', svg)
+
+    def test_finished_run_shows_the_third_act(self):
+        response = self.start()
+        guard = 0
+        while True:
+            guard += 1
+            self.assertLess(guard, 40)
+            state = decode(token_of(response))
+            if state.phase is Phase.DONE:
+                break
+            if state.phase is Phase.GUEST:
+                response = self.post(response, action='guest', counter='0')
+            elif state.phase is Phase.FINAL:
+                sim = Simulation(tree=get_tree(), state=state)
+                response = self.post(
+                    response, action='final', final=sim.available_finals()[0]
+                )
+            elif get_tree().node(state.node).choices:
+                response = self.post(response, action='choice', choice='A')
+            else:
+                response = self.post(response, action='advance')
+        self.assertContains(response, 'Схема третьего акта')
+        self.assertContains(response, '<svg class="tree"')
 
     def test_broken_token_is_rejected(self):
         response = self.client.post(

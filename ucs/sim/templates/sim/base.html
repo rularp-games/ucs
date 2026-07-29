@@ -123,6 +123,37 @@
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
   .kv dt { color: var(--dim); }
   .kv dd { margin: 0; }
+
+  /* Схема дерева */
+  .scroll-x { overflow-x: auto; }
+  svg.tree { max-width: 100%; height: auto; display: block; }
+  svg.tree text { font-family: ui-serif, Georgia, serif; fill: var(--ink); }
+  svg.tree text.band { font-size: 12px; letter-spacing: .09em; text-transform: uppercase;
+                       fill: var(--dim); }
+  svg.tree text.id { font-size: 12px; font-family: ui-monospace, monospace;
+                     fill: var(--accent); }
+  svg.tree text.ttl { font-size: 12.5px; }
+  svg.tree .n rect { fill: var(--panel-2); stroke: var(--line); stroke-width: 1; }
+  svg.tree .n.dead rect, svg.tree .n.false rect { stroke: var(--warn);
+                                                  stroke-dasharray: 4 3; }
+  svg.tree .n.seen rect { fill: #2f2717; stroke: var(--accent); }
+  svg.tree .n.now rect { fill: #3d3117; stroke: var(--accent); stroke-width: 2.5; }
+  svg.tree .n.fin rect { stroke: var(--ok); }
+  svg.tree .n.fin.chosen rect { fill: #26301f; stroke: var(--ok); stroke-width: 2.5; }
+  svg.tree .n.fin.off { opacity: .35; }
+  svg.tree .lamp { fill: var(--lamp); }
+  svg.tree .e { fill: none; stroke: var(--line); stroke-width: 1.2; }
+  svg.tree .e.on { stroke: var(--accent); stroke-width: 2.2; }
+  svg.tree .ahead { fill: var(--line); stroke: none; }
+  svg.tree .ahead.on { fill: var(--accent); }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px;
+            color: var(--dim); }
+  .legend b { color: var(--ink); font-weight: 600; }
+  details.src { margin-top: 14px; }
+  details.src summary { cursor: pointer; color: var(--accent); font-size: 14px; }
+  details.src pre { background: var(--panel-2); border: 1px solid var(--line);
+                    border-radius: 4px; padding: 12px 14px; overflow-x: auto;
+                    font-size: 12.5px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -130,6 +161,7 @@
   <h1>{% block heading %}Симулятор модели науки{% endblock %}</h1>
   <nav>
     <a href="{% url 'sim:index' %}">начало</a>
+    <a href="{% url 'sim:tree' %}">схема</a>
     <a href="{% url 'sim:table' %}">стол</a>
     <a href="{% url 'sim:report' %}">сводка</a>
   </nav>

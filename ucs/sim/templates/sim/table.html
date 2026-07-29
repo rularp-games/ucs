@@ -44,6 +44,11 @@
     <p class="path">{% for node_id in path %}{{ node_id }}{% if not forloop.last %} → {% endif %}{% endfor %}</p>
   </div>
 
+  {% if diagram %}
+  <h2>Схема третьего акта</h2>
+  <div class="panel scroll-x">{{ diagram }}</div>
+  {% endif %}
+
   <form method="post" action="{% url 'sim:restart' %}">
     {% csrf_token %}
     <input type="hidden" name="tree" value="{{ tree.name }}">
@@ -292,6 +297,17 @@
         решение в игре, которое он принимает единолично.
       </p>
     </form>
+  </div>
+  {% endif %}
+
+  {% if diagram %}
+  <h2>Где группа сейчас</h2>
+  <div class="panel scroll-x">
+    {{ diagram }}
+    <p class="note" style="margin:12px 0 0">
+      Акт {{ node.act }}. Подсвечен пройденный путь, толстой рамкой — текущая
+      карточка. <a href="{% url 'sim:tree' %}?tree={{ tree.name }}">Всё дерево</a>
+    </p>
   </div>
   {% endif %}
 
