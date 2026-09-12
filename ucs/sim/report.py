@@ -27,7 +27,7 @@ def format_report(report: Report, tree: Tree, top_paths: int = 8) -> str:
     add(f'Стратегия: {report.strategy} — {report.strategy_description}')
     add(
         f'Прогонов: {report.iterations}, '
-        f'вероятность прихода гостя на лампу: {report.guest_probability:.0%}, '
+        f'доля гостей, уносящих предмет: {report.guest_probability:.0%}, '
         f'seed: {report.seed}'
     )
 

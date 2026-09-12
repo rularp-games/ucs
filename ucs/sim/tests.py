@@ -683,9 +683,16 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(report.available_count[1], 0)
 
     def test_lazy_path_collects_doubt(self):
-        """Ленивый путь набирает СОМНЕНИЕ — это срезанный угол, а не достижение."""
-        report, _ = run_batch(iterations=100, strategy_name='lazy', seed=3)
-        self.assertEqual(report.share(report.marks_at_final['СОМНЕНИЕ']), 1.0)
+        """Ленивый путь набирает СОМНЕНИЕ — это срезанный угол, а не достижение.
+
+        Метку выдаёт первый же срезанный угол в 1.2a, и до финала она доходит
+        почти всегда. Не всегда: если гость на 3.1 уносит сводку, а других меток
+        у группы нет, забирает он именно СОМНЕНИЕ. При доле уносящих 1.0 такая
+        группа доходила до финала пустой и получала СОМНЕНИЕ обратно по правилу
+        нижней границы, поэтому раньше здесь стояла ровно единица.
+        """
+        report, _ = run_batch(iterations=2000, strategy_name='lazy', seed=3)
+        self.assertGreater(report.share(report.marks_at_final['СОМНЕНИЕ']), 0.8)
 
     def test_john_can_spend_all_three_moves(self):
         report, _ = run_batch(iterations=2000, strategy_name='counter', seed=4)

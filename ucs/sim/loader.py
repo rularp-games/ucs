@@ -178,6 +178,10 @@ class Tree:
     name: str
     title: str
     source: str
+    # Доля гостей, уносящих предмет: гость приходит на каждую лампу, но бумагу
+    # забирает только половина из них. Значение задаёт модель, симулятор берёт
+    # его как значение по умолчанию.
+    guest_take_rate: float
     marks: tuple[str, ...]
     mark_descriptions: dict[str, str]
     roles: dict[str, str]
@@ -229,6 +233,19 @@ def _clean(raw) -> str:
     if raw is None:
         return ''
     return ' '.join(str(raw).split())
+
+
+def _rate(raw, name: str, default: float = 1.0) -> float:
+    """Доля от нуля до единицы. Пропущенное значение — прежнее поведение."""
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise TreeError(f'{name}: ожидалось число от 0 до 1, получено {raw!r}') from None
+    if not 0.0 <= value <= 1.0:
+        raise TreeError(f'{name}: доля должна быть от 0 до 1, получено {value}')
+    return value
 
 
 def _parse_mark_effect(raw: dict | None, node_id: str) -> MarkEffect:
@@ -371,6 +388,7 @@ def parse_tree(raw: dict, name: str = DEFAULT_TREE) -> Tree:
         name=name,
         title=_clean(meta.get('title')),
         source=str(meta.get('source', '')),
+        guest_take_rate=_rate(meta.get('guest_take_rate'), 'meta.guest_take_rate'),
         marks=tuple(marks),
         mark_descriptions={k: _clean(v) for k, v in marks.items()},
         roles={str(k): _clean(v) for k, v in (raw.get('roles') or {}).items()},

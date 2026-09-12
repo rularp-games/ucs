@@ -92,7 +92,7 @@ def table(request):
 
     guest_probability = _float(
         request.POST.get('guest_probability', request.GET.get('guest_probability')),
-        default=1.0,
+        default=tree.guest_take_rate,
     )
 
     token = request.POST.get('state') or request.GET.get('state')
@@ -271,7 +271,10 @@ def report(request):
         strategy = 'random'
     iterations = min(max(_int(request.GET.get('iterations'), 2000), 1), MAX_ITERATIONS)
     seed = _int(request.GET.get('seed'), 0) or None
-    guest_probability = min(max(_float(request.GET.get('guest_probability'), 1.0), 0.0), 1.0)
+    raw_probability = _float(request.GET.get('guest_probability'), -1.0)
+    guest_probability = (
+        None if raw_probability < 0.0 else min(max(raw_probability, 0.0), 1.0)
+    )
 
     try:
         batch, tree = run_batch(
@@ -293,7 +296,7 @@ def report(request):
             'strategies': sorted(STRATEGIES),
             'iterations': iterations,
             'seed': seed,
-            'guest_probability': guest_probability,
+            'guest_probability': batch.guest_probability,
             'strategy': strategy,
             'finals_rows': _finals_rows(batch, tree),
             'marks_rows': _marks_rows(batch, tree),

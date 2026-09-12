@@ -2,7 +2,7 @@
 
     python3 manage.py sim_run
     python3 manage.py sim_run --iterations 50000 --strategy counter
-    python3 manage.py sim_run --strategy passive --guest-probability 0.5 --log
+    python3 manage.py sim_run --strategy passive --guest-probability 1.0 --log
     python3 manage.py sim_run --validate-only
     python3 manage.py sim_run --compare
 """
@@ -37,8 +37,8 @@ class Command(BaseCommand):
         parser.add_argument(
             '--guest-probability',
             type=float,
-            default=1.0,
-            help='вероятность прихода гостя на лампу (модель предполагает 1.0)',
+            default=None,
+            help='доля гостей, уносящих предмет (по умолчанию — значение модели)',
         )
         parser.add_argument(
             '--top-paths', type=int, default=8, help='сколько частых путей показать'
@@ -74,6 +74,8 @@ class Command(BaseCommand):
             return
 
         probability = options['guest_probability']
+        if probability is None:
+            probability = tree.guest_take_rate
         if not 0.0 <= probability <= 1.0:
             raise CommandError('--guest-probability должна быть от 0 до 1')
 

@@ -135,9 +135,11 @@ def run_batch(
     strategy_name: str = 'random',
     tree_name: str | None = None,
     seed: int | None = None,
-    guest_probability: float = 1.0,
+    guest_probability: float | None = None,
 ) -> tuple[Report, Tree]:
     tree = get_tree(tree_name) if tree_name else get_tree()
+    if guest_probability is None:
+        guest_probability = tree.guest_take_rate
     rng = random.Random(seed)
     strategy = get_strategy(strategy_name, rng)
     report = Report(
