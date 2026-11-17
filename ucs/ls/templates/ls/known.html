@@ -1,0 +1,19 @@
+{% extends "ls/base.html" %}
+{% block title %}Что я знаю · {{ player.callsign }}{% endblock %}
+{% block content %}
+<h2>Что я знаю</h2>
+{% for s in sections %}
+<h2>{{ s.title }}</h2>
+{% for item in s.items %}
+<div class="panel protocol"><span class="dim">{{ forloop.counter }}.</span> {{ item.payload }}</div>
+{% empty %}
+<p class="dim">Пока ничего.</p>
+{% endfor %}
+{% endfor %}
+<h2>Рация</h2>
+<div class="panel">
+  {% if player.radio_level == 0 %}Рации нет.
+  {% elif player.radio_level == 1 %}Уровень 1. Эфир открыт.
+  {% else %}Уровень 2. Рация работает и на посту.{% endif %}
+</div>
+{% endblock %}

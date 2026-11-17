@@ -1,0 +1,56 @@
+{% extends "ls/model_base.html" %}
+{% block instruction %}Выполните чек-лист. Остальные положения не менять.{% endblock %}
+{% block style %}
+  .switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .sw { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; user-select: none; }
+  .sw input { position: absolute; opacity: 0; pointer-events: none; }
+  .sw .track { width: 46px; height: 24px; border-radius: 12px; background: #0c121b; border: 1px solid var(--line); position: relative; flex: none; transition: background .12s; }
+  .sw .track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--dim); transition: left .12s, background .12s; }
+  .sw input:checked + .track { background: #17314a; border-color: var(--accent); }
+  .sw input:checked + .track::after { left: 24px; background: var(--accent); }
+  .sw input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .sw .state { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--dim); }
+  .checklist li { padding: 3px 0; font-size: 17px; }
+{% endblock %}
+{% block task %}
+{% if not auto %}
+<div class="panel">
+  <div class="mono dim" style="margin-bottom:6px">Чек-лист</div>
+  <ol class="checklist" style="margin:0;padding-left:24px">
+    {% for line in checklist %}<li>{{ line }}</li>{% endfor %}
+  </ol>
+</div>
+<div class="switches" id="switches">
+  {% for s in switches %}
+  <label class="sw">
+    <input type="checkbox" data-i="{{ s.index }}"{% if s.on %} checked{% endif %}>
+    <span class="track"></span>
+    <span>{{ s.name }}</span>
+    <span class="state"></span>
+  </label>
+  {% endfor %}
+</div>
+<form method="post" id="answer-form" class="row" style="margin-top:14px">
+  {% csrf_token %}
+  <input type="hidden" name="answer" id="answer" value="">
+  <button class="primary" id="confirm">Подтвердить</button>
+</form>
+{% endif %}
+{% endblock %}
+{% block script %}
+{% if not auto %}
+<script>
+(function () {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('#switches input'));
+  function sync() {
+    boxes.forEach(function (b) {
+      b.parentNode.querySelector('.state').textContent = b.checked ? 'ВКЛ' : 'ВЫКЛ';
+    });
+    document.getElementById('answer').value = boxes.map(function (b) { return b.checked ? '1' : '0'; }).join('');
+  }
+  boxes.forEach(function (b) { b.addEventListener('change', sync); });
+  sync();
+})();
+</script>
+{% endif %}
+{% endblock %}

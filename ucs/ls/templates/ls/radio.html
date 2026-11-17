@@ -1,0 +1,29 @@
+{% extends "ls/base.html" %}
+{% block title %}Эфир · {{ player.callsign }}{% endblock %}
+{% block content %}
+<h2>Эфир</h2>
+{% if player.radio_level >= 2 %}<p class="tag" style="display:inline-block">рация работает и на посту</p>{% endif %}
+<form method="post" class="panel">
+  {% csrf_token %}
+  <label class="field">Сообщение
+    <textarea name="text" rows="2" maxlength="500" id="text"></textarea>
+  </label>
+  <button class="primary">Отправить</button>
+</form>
+<div class="protocol">
+  {% for m in items %}
+  <div class="panel" style="padding:10px 14px"><span class="dim">{{ m.created_at|date:"H:i:s" }}</span>
+    <strong>{{ m.player.callsign }}</strong>: {{ m.text }}</div>
+  {% empty %}
+  <p class="dim">В эфире тихо.</p>
+  {% endfor %}
+</div>
+{% endblock %}
+{% block script %}
+<script>
+// Эфир обновляется сам, пока игрок ничего не печатает.
+setInterval(function () {
+  if (!document.getElementById('text').value) location.reload();
+}, 15000);
+</script>
+{% endblock %}

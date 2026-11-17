@@ -1,0 +1,16 @@
+{% extends "ls/base.html" %}
+{% block title %}Вход · Потеряно соединение со спутниками{% endblock %}
+{% block content %}
+<h2>Вход на пост</h2>
+<form method="post" class="panel" style="max-width:420px">
+  {% csrf_token %}
+  {% if error %}<p style="color:var(--warn)">{{ error }}</p>{% endif %}
+  <label class="field">Код сеанса
+    <input type="text" name="code" value="{{ code }}" autocomplete="off" autocapitalize="off" required>
+  </label>
+  <label class="field">Позывной
+    <input type="text" name="callsign" autocomplete="off" required>
+  </label>
+  <button class="primary">Войти</button>
+</form>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "ls/master_base.html" %}
+{% block title %}Мастер · {{ player.callsign }}{% endblock %}
+{% block content %}
+<p><a href="{% url 'ls:master_game' game.pk %}">&larr; {{ game.title }}</a></p>
+<h2>{{ player.callsign }} <span class="dim">· {{ player.flight.name }}</span></h2>
+<div class="panel">
+  Навигация {{ player.sync_nav }}% · Движение {{ player.sync_move }}% · Части {{ player.sync_parts }}% · Огонь {{ player.sync_fire }}%
+  · Карты {{ player.cards }} · Рация {{ player.radio_level }}
+</div>
+<h2>Попытки</h2>
+<div class="panel table-wrap"><table>
+  <tr><th>Время</th><th>Параметр</th><th>Sync до</th><th>Итог</th></tr>
+  {% for a in attempts %}
+  <tr><td class="mono">{{ a.created_at|date:"H:i:s" }}</td><td>{{ a.param }}</td><td>{{ a.level }}</td>
+    <td>{% if a.deviation %}отказ{% elif a.success %}выполнено{% else %}провал{% endif %}</td></tr>
+  {% empty %}<tr><td colspan="4" class="dim">Попыток нет.</td></tr>{% endfor %}
+</table></div>
+<h2>Покупки</h2>
+<div class="panel table-wrap"><table>
+  <tr><th>Время</th><th>Вид</th><th>Выдано</th></tr>
+  {% for p in purchases %}
+  <tr><td class="mono">{{ p.created_at|date:"H:i:s" }}</td><td>{{ p.get_kind_display }}</td><td>{{ p.payload }}</td></tr>
+  {% empty %}<tr><td colspan="3" class="dim">Покупок нет.</td></tr>{% endfor %}
+</table></div>
+<h2>Введённые жетоны</h2>
+<div class="panel">
+  {% for t in tokens_used %}<span class="mono">{{ t.code }}</span> ({{ t.get_symbol_display }}){% if not forloop.last %}, {% endif %}{% empty %}<span class="dim">Нет.</span>{% endfor %}
+</div>
+{% endblock %}
