@@ -1,0 +1,56 @@
+{% extends 'sim/base.html' %}
+
+{% block title %}Схема — {{ tree.title }}{% endblock %}
+{% block heading %}Схема дерева: {{ tree.title }}{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+  <p class="note" style="margin-top:0">
+    {{ tree.nodes|length }} узлов и {{ finals|length }} финала — за игру группа
+    проходит по одному узлу на каждую позицию акта плюс карточку финала. Схема
+    строится из того же файла дерева, что и правила, поэтому разойтись с ними не
+    может.
+  </p>
+  <div class="legend">
+    <span><b>жёлтая точка</b> — лампа, приходят гости</span>
+    <span><b>пунктир</b> — тупик или ложный выход</span>
+    <span><b>зелёная рамка</b> — финал</span>
+  </div>
+</div>
+
+<div class="panel scroll-x">{{ svg }}</div>
+
+<h2>Финалы и что их открывает</h2>
+<div class="panel">
+  <table>
+    <tr><th>Финал</th><th>Открыт меткой</th></tr>
+    {% for final in finals %}
+    <tr>
+      <td><b>{{ final.key }}</b> {{ final.title }}</td>
+      <td class="note">{{ final.opened_by }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note" style="margin-bottom:0">
+    Стрелки от карточек третьего акта показывают то, к чему подталкивает сама
+    карточка. Сверх этого группе доступен любой финал, открытый её метками, —
+    решают метки, карточка только предлагает.
+  </p>
+</div>
+
+<h2>Исходник Mermaid</h2>
+<div class="panel">
+  <p class="note" style="margin-top:0">
+    Та же схема по актам в виде Mermaid — для вставки в документ модели.
+    Генерируется из файла дерева, поэтому не разойдётся с механикой.
+  </p>
+  {% for act, title, source in mermaid %}
+  <details class="src">
+    <summary>Акт {{ act }} — {{ title }}</summary>
+    <pre>{{ source }}</pre>
+  </details>
+  {% endfor %}
+</div>
+
+{% endblock %}

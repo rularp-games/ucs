@@ -1,0 +1,50 @@
+{% extends "ls/master_base.html" %}
+{% block title %}Мастер · {{ player.callsign }}{% endblock %}
+{% block content %}
+<p><a href="{% url 'ls:master_game' game.pk %}">&larr; {{ game.title }}</a></p>
+<h2>{{ player.callsign }} <span class="dim">· {{ character_name }} ({{ player.get_gender_display }}) · {{ player.flight.name }}</span></h2>
+<div class="panel">
+  Навигация {{ player.sync_nav }}% · Движение {{ player.sync_move }}% · Части {{ player.sync_parts }}% · Огонь {{ player.sync_fire }}%
+  · Карты {{ player.cards }} · Рация {{ player.radio_level }}
+</div>
+<h2>Попытки</h2>
+<div class="panel table-wrap"><table>
+  <tr><th>Время</th><th>Параметр</th><th>Sync до</th><th>Итог</th></tr>
+  {% for a in attempts %}
+  <tr><td class="mono">{{ a.created_at|date:"H:i:s" }}</td><td>{{ a.param }}</td><td>{{ a.level }}</td>
+    <td>{% if a.deviation %}отказ{% elif a.success %}выполнено{% else %}провал{% endif %}</td></tr>
+  {% empty %}<tr><td colspan="4" class="dim">Попыток нет.</td></tr>{% endfor %}
+</table></div>
+<h2>Покупки</h2>
+<div class="panel table-wrap"><table>
+  <tr><th>Время</th><th>Вид</th><th>Выдано</th></tr>
+  {% for p in purchases %}
+  <tr><td class="mono">{{ p.created_at|date:"H:i:s" }}</td><td>{{ p.get_kind_display }}</td><td>{{ p.payload }}</td></tr>
+  {% empty %}<tr><td colspan="3" class="dim">Покупок нет.</td></tr>{% endfor %}
+</table></div>
+<h2>Выданные жетоны</h2>
+<div class="panel table-wrap"><table>
+  <tr><th>Выдан</th><th>Код</th><th>Символ</th><th>Состояние</th><th>Ввёл</th></tr>
+  {% for row in tokens_issued %}
+  <tr><td class="mono">{{ row.token.issued_at|date:"H:i:s" }}</td><td class="mono">{{ row.token.code }}</td>
+    <td>{{ row.token.get_symbol_display }}</td><td>{{ row.state }}</td>
+    <td>{% if row.token.used_by %}{{ row.token.used_by.callsign }}, {{ row.token.used_at|date:"H:i:s" }}{% else %}<span class="dim">—</span>{% endif %}</td></tr>
+  {% empty %}<tr><td colspan="5" class="dim">Жетонов не выдавали.</td></tr>{% endfor %}
+</table></div>
+<h2>Введённые жетоны</h2>
+<div class="panel table-wrap"><table>
+  <tr><th>Введён</th><th>Код</th><th>Символ</th><th>Итог</th><th>Чей</th></tr>
+  {% for t in tokens_used %}
+  <tr><td class="mono">{{ t.used_at|date:"H:i:s" }}</td><td class="mono">{{ t.code }}</td>
+    <td>{{ t.get_symbol_display }}</td><td>{% if t.burned %}сгорел{% else %}совпал{% endif %}</td>
+    <td>{{ t.issued_to.callsign|default:"—" }}</td></tr>
+  {% empty %}<tr><td colspan="5" class="dim">Нет.</td></tr>{% endfor %}
+</table></div>
+<h2>Архив</h2>
+<div class="panel table-wrap"><table>
+  <tr><th>Время</th><th>Код</th><th>Запись</th><th>Как</th></tr>
+  {% for o in archive_opens %}
+  <tr><td class="mono">{{ o.created_at|date:"H:i:s" }}</td><td class="mono">{{ o.code }}</td><td>{{ o.title }}</td><td>{{ o.via }}</td></tr>
+  {% empty %}<tr><td colspan="4" class="dim">Записей нет.</td></tr>{% endfor %}
+</table></div>
+{% endblock %}

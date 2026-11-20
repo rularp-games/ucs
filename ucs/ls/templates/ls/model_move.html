@@ -1,0 +1,114 @@
+{% extends "ls/model_base.html" %}
+{% block instruction %}Удерживайте шарик между метками. Стрелки влево и вправо.{% endblock %}
+{% block style %}
+  .rig { width: 100%; max-width: 720px; display: block; background: #070b11; border: 1px solid var(--line); border-radius: 4px; }
+  .rig .plank { fill: #2a3a52; stroke: var(--accent); stroke-width: 1; }
+  .rig .mark { stroke: var(--warn); stroke-width: 3; }
+  .rig .ball { fill: #dbe7f3; }
+  .timer { font: 600 32px ui-monospace, monospace; }
+  .pad { display: flex; gap: 12px; margin-top: 12px; }
+  .pad button { flex: 1; font-size: 28px; padding: 18px 0; touch-action: none; user-select: none; }
+{% endblock %}
+{% block task %}
+{% if not auto %}
+<div class="row" style="margin-bottom:10px">
+  <span class="grow dim">Удержать: <b class="mono">{{ task.seconds }}</b> с</span>
+  <span class="timer" id="timer">{{ task.seconds }}.0</span>
+</div>
+<svg class="rig" id="rig" viewBox="0 0 600 200" role="img" aria-label="Планка с шариком">
+  <line class="mark" x1="235" y1="60" x2="235" y2="150"/>
+  <line class="mark" x1="365" y1="60" x2="365" y2="150"/>
+  <g id="tilt" transform="rotate(0 300 130)">
+    <rect class="plank" x="30" y="130" width="540" height="10" rx="3"/>
+    <circle class="ball" id="ball" cx="300" cy="118" r="12"/>
+  </g>
+  <polygon points="300,140 285,170 315,170" fill="#2a3a52"/>
+</svg>
+<div class="pad noprint">
+  <button type="button" id="left" aria-label="Влево">&larr;</button>
+  <button type="button" id="right" aria-label="Вправо">&rarr;</button>
+</div>
+<form method="post" id="answer-form" class="row" style="margin-top:14px">
+  {% csrf_token %}
+  <input type="hidden" name="result" id="result" value="">
+  <input type="hidden" name="elapsed" id="elapsed" value="0">
+  <button type="button" class="primary" id="start">Начать</button>
+  <span class="mono dim" id="state">Нажмите «Начать», затем держите шарик между красными метками.</span>
+</form>
+{% endif %}
+{% endblock %}
+{% block script %}
+{% if not auto %}
+<script>
+(function () {
+  // Параметры физики: положение шарика x от -1 до 1, метки на ±0.25.
+  var NEED = {{ task.seconds }};
+  var LIMIT = 0.25, HALF = 270;
+  var GRAVITY = 1.2, DRIFT_STEP = 3, DRIFT_MAX = 0.3, TILT_RATE = 2.2, TILT_RETURN = 0.8, DAMP = 1.0;
+
+  var ball = document.getElementById('ball');
+  var tiltG = document.getElementById('tilt');
+  var timerEl = document.getElementById('timer');
+  var stateEl = document.getElementById('state');
+  var startBtn = document.getElementById('start');
+  var form = document.getElementById('answer-form');
+  var running = false, input = 0;
+  var x, v, drift, angle, t0, last;
+
+  function keyDir(e) { return e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0; }
+  document.addEventListener('keydown', function (e) {
+    var d = keyDir(e);
+    if (d) { input = d; e.preventDefault(); }
+  });
+  document.addEventListener('keyup', function (e) { if (keyDir(e)) input = 0; });
+  [['left', -1], ['right', 1]].forEach(function (p) {
+    var b = document.getElementById(p[0]);
+    b.addEventListener('pointerdown', function (e) { input = p[1]; e.preventDefault(); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (n) {
+      b.addEventListener(n, function () { if (input === p[1]) input = 0; });
+    });
+  });
+
+  function draw() {
+    var deg = angle * 12;
+    tiltG.setAttribute('transform', 'rotate(' + deg + ' 300 130)');
+    ball.setAttribute('cx', 300 + x * HALF);
+  }
+  function finish(ok) {
+    running = false;
+    document.getElementById('result').value = ok ? 'ok' : 'fail';
+    document.getElementById('elapsed').value = ((performance.now() - t0) / 1000).toFixed(2);
+    stateEl.textContent = ok ? 'Готово, отправляю…' : 'Шарик упал.';
+    setTimeout(function () { form.submit(); }, ok ? 300 : 900);
+  }
+  function frame(now) {
+    if (!running) return;
+    var dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    drift += (Math.random() - 0.5) * DRIFT_STEP * dt;
+    drift = Math.max(-DRIFT_MAX, Math.min(DRIFT_MAX, drift));
+    if (input) angle += input * TILT_RATE * dt; else angle -= angle * TILT_RETURN * dt;
+    angle = Math.max(-1, Math.min(1, angle));
+    v += (angle * GRAVITY + drift) * dt;
+    v -= v * DAMP * dt;
+    x += v * dt;
+    draw();
+    var elapsed = (now - t0) / 1000;
+    timerEl.textContent = Math.max(0, NEED - elapsed).toFixed(1);
+    if (Math.abs(x) > LIMIT) { finish(false); return; }
+    if (elapsed >= NEED) { finish(true); return; }
+    requestAnimationFrame(frame);
+  }
+  startBtn.addEventListener('click', function () {
+    startBtn.disabled = true;
+    stateEl.textContent = 'Держите.';
+    x = 0; v = 0; drift = (Math.random() - 0.5) * 0.4; angle = 0;
+    t0 = last = performance.now();
+    running = true;
+    requestAnimationFrame(frame);
+  });
+  x = 0; angle = 0; draw();
+})();
+</script>
+{% endif %}
+{% endblock %}

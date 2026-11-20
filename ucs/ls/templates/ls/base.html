@@ -1,0 +1,138 @@
+{% load ls_extras %}<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Потеряно соединение со спутниками{% endblock %}</title>
+<style>
+  :root {
+    --bg: #0a0e15;
+    --panel: #111823;
+    --panel-2: #172131;
+    --ink: #cfd6df;
+    --dim: #7b8798;
+    --line: #243044;
+    --accent: #6cb4e6;
+    --warn: #b9615f;
+    --ok: #6f9c80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+  a { color: var(--accent); }
+  .mono, code, .tag, th { font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; }
+  header.top {
+    border-bottom: 1px solid var(--line);
+    padding: 12px 20px;
+    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    background: var(--panel);
+  }
+  header.top h1 {
+    font: 600 14px ui-monospace, Menlo, Consolas, monospace;
+    letter-spacing: .12em; text-transform: uppercase; margin: 0; color: var(--accent);
+  }
+  header.top nav { margin-left: auto; display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; align-items: center; }
+  header.top nav a { text-decoration: none; padding: 2px 0; border-bottom: 1px solid transparent; }
+  header.top nav a.on, header.top nav a:hover { border-bottom-color: var(--accent); }
+  main { max-width: 960px; margin: 0 auto; padding: 20px; }
+  main.wide { max-width: 1280px; }
+  h2 {
+    font: 600 13px ui-monospace, Menlo, Consolas, monospace;
+    text-transform: uppercase; letter-spacing: .12em; color: var(--dim); margin: 24px 0 10px;
+  }
+  h2:first-child { margin-top: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 16px 18px; margin-bottom: 16px; }
+  .panel.instr { border-color: var(--accent); }
+  .panel.auto { border-color: var(--ok); color: var(--ok); font-size: 20px; text-align: center; padding: 32px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .grow { flex: 1; }
+  .dim { color: var(--dim); }
+  .tag { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border: 1px solid var(--line); border-radius: 3px; color: var(--dim); }
+  .tag.open { color: var(--accent); border-color: var(--accent); }
+  .tag.auto { color: var(--ok); border-color: var(--ok); }
+  .tag.closed { color: var(--warn); border-color: var(--warn); }
+  .btn, button {
+    font: 500 14px ui-monospace, Menlo, Consolas, monospace;
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+    padding: 8px 14px; border-radius: 3px; cursor: pointer; text-decoration: none; display: inline-block;
+  }
+  .btn:hover, button:hover { border-color: var(--accent); }
+  .btn.primary, button.primary { background: #17314a; border-color: var(--accent); color: #e4f1fb; }
+  .btn.danger, button.danger { border-color: var(--warn); color: #e0a3a1; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  input[type=text], input[type=number], input[type=password], textarea, select {
+    background: #0c121b; color: var(--ink); border: 1px solid var(--line); border-radius: 3px;
+    padding: 8px 10px; font: 15px ui-monospace, Menlo, Consolas, monospace; width: 100%;
+  }
+  label.field { display: block; margin-bottom: 12px; font-size: 13px; color: var(--dim); }
+  label.field input, label.field select { margin-top: 4px; }
+  .bar { height: 8px; background: #0c121b; border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .bar.auto > i { background: var(--ok); }
+  .bar.closed > i { background: var(--line); }
+  .params { display: grid; gap: 10px; }
+  .param { display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; align-items: center; }
+  .param .name { font-weight: 600; }
+  .param .bar { grid-column: 1 / -1; }
+  .msgs { list-style: none; margin: 0 0 16px; padding: 0; }
+  .msgs li { padding: 10px 14px; border: 1px solid var(--line); border-left-width: 4px; background: var(--panel); margin-bottom: 6px; border-radius: 3px; }
+  .msgs li.success { border-left-color: var(--ok); }
+  .msgs li.warning { border-left-color: #b39a58; }
+  .msgs li.error { border-left-color: var(--warn); }
+  .msgs li.payload { border-left-color: var(--accent); font-size: 17px; line-height: 1.6; padding: 16px 18px; white-space: pre-line; }
+  .dark { border-color: var(--warn); }
+  .dark h3 { font: 600 15px ui-monospace, Menlo, Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; color: #e0a3a1; margin: 0 0 12px; }
+  .dark-tokens { display: flex; gap: 14px; flex-wrap: wrap; }
+  .dtoken { flex: 1 1 180px; text-align: center; padding: 14px 10px; background: #0c121b; border: 1px dashed var(--warn); border-radius: 4px; }
+  .dtoken .num { font: 600 44px/1.1 ui-monospace, Menlo, Consolas, monospace; letter-spacing: .18em; }
+  .dtoken svg { margin-top: 6px; }
+  .protocol { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); font-weight: 500; }
+  .table-wrap { overflow-x: auto; }
+  .sym { vertical-align: middle; }
+  .big-result { font: 600 28px ui-monospace, Menlo, Consolas, monospace; text-align: center; padding: 24px 0; }
+  .big-result.success { color: var(--ok); }
+  .big-result.fail, .big-result.deviation { color: var(--warn); }
+  .center { text-align: center; }
+  @media (max-width: 600px) { main { padding: 14px; } header.top { padding: 10px 14px; } }
+  @media print {
+    body { background: #fff; color: #000; }
+    header.top, .noprint, .msgs { display: none !important; }
+    main { max-width: none; padding: 0; }
+    .panel { border-color: #999; background: #fff; break-inside: avoid; }
+  }
+  {% block style %}{% endblock %}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Связь со спутниками</h1>
+  <nav>
+    {% block nav %}
+      {% if player %}
+        <a href="{% url 'ls:post' %}"{% if active == 'post' %} class="on"{% endif %}>Пост</a>
+        <a href="{% url 'ls:codes' %}"{% if active == 'codes' %} class="on"{% endif %}>Коды</a>
+        <a href="{% url 'ls:cards' %}"{% if active == 'cards' %} class="on"{% endif %}>Карты</a>
+        <a href="{% url 'ls:known' %}"{% if active == 'known' %} class="on"{% endif %}>Что я знаю</a>
+        {% if has_radio %}<a href="{% url 'ls:radio' %}"{% if active == 'radio' %} class="on"{% endif %}>Эфир</a>{% endif %}
+        <form method="post" action="{% url 'ls:logout' %}" style="display:inline">{% csrf_token %}<button class="small">Выйти</button></form>
+      {% endif %}
+    {% endblock %}
+  </nav>
+</header>
+<main class="{% block mainclass %}{% endblock %}">
+  {% if messages %}
+  <ul class="msgs">{% for m in messages %}<li class="{{ m.tags }}">{{ m }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% block content %}{% endblock %}
+</main>
+{% block script %}{% endblock %}
+</body>
+</html>

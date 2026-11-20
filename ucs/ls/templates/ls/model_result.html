@@ -1,0 +1,18 @@
+{% extends "ls/base.html" %}
+{% block title %}Итог · {{ param_title }}{% endblock %}
+{% block content %}
+<h2>{{ param_title }}</h2>
+{% if kind == 'success' %}<div class="big-result success">Выполнено</div>
+{% elif kind == 'fail' %}<div class="big-result fail">Провал</div>
+{% else %}<div class="big-result deviation">Отказ принят</div>{% endif %}
+<div class="panel">
+  <div class="row"><span class="grow">Синхронизация</span><span class="mono">{{ value }}%</span></div>
+  <div class="bar {{ mode }}" style="margin-top:8px"><i style="width:{{ value }}%"></i></div>
+  {% if unlocked %}<p class="mono" style="color:var(--accent);margin-bottom:0">Доступно: {{ unlocked }}</p>{% endif %}
+  {% if mode == 'auto' %}<p class="mono" style="color:var(--ok);margin-bottom:0">Автоматика</p>{% endif %}
+</div>
+<p class="row">
+  {% if mode != 'auto' %}<a class="btn primary" href="{% url 'ls:model' param %}?new=1">Следующая задача</a>{% endif %}
+  <a class="btn" href="{% url 'ls:post' %}">К посту</a>
+</p>
+{% endblock %}

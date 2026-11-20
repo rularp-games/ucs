@@ -1,0 +1,6 @@
+{% extends "ls/base.html" %}
+{% block nav %}
+  <a href="{% url 'ls:master_index' %}">Игры</a>
+  <a href="{% url 'admin:index' %}">Админка</a>
+{% endblock %}
+{% block mainclass %}wide{% endblock %}

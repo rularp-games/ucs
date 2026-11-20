@@ -1,0 +1,61 @@
+{% extends "ls/base.html" %}
+{% load ls_extras %}
+{% block title %}Пост · {{ player.callsign }}{% endblock %}
+{% block content %}
+{% include 'ls/_dark_tokens.html' %}
+<div class="panel">
+  <div class="row">
+    <div class="grow">
+      <div class="mono dim">Позывной</div>
+      <div style="font-size:26px;font-weight:600">{{ player.callsign }}</div>
+      <div class="dim">{{ player.flight.name }}</div>
+    </div>
+    <div class="center">
+      {% symbol_icon player.symbol 56 %}
+      <div class="mono dim">{{ player.symbol|symbol_name }}</div>
+    </div>
+  </div>
+  {% if not started %}<p class="mono" style="color:var(--accent);margin-bottom:0">Ожидание сеанса</p>{% endif %}
+</div>
+
+<h2>Параметры</h2>
+<div class="panel params">
+  {% for p in params %}
+  <div class="param">
+    <div>
+      <span class="name">{{ p.title }}</span>
+      <span class="dim mono">{{ p.value }}%</span>
+    </div>
+    <div>
+      {% if p.mode == 'closed' %}<span class="tag closed">закрыто</span>
+      {% elif p.mode == 'auto' %}<a class="tag auto" href="{% url 'ls:model' p.key %}">автоматика</a>
+      {% else %}<a class="btn" href="{% url 'ls:model' p.key %}">{{ p.model }}</a>{% endif %}
+    </div>
+    <div class="bar {{ p.mode }}"><i style="width: {% if p.mode == 'closed' %}0{% else %}{{ p.value }}{% endif %}%"></i></div>
+  </div>
+  {% endfor %}
+</div>
+
+<h2>Ресурсы</h2>
+<div class="panel">
+  <div class="row">
+    <div class="grow">Карты сопротивления: <strong class="mono" style="font-size:20px">{{ player.cards }}</strong></div>
+    {% if player.radio_level >= 2 %}<span class="tag open">рация работает и на посту</span>
+    {% elif player.radio_level == 1 %}<span class="tag open">рация</span>{% endif %}
+  </div>
+  <p class="row" style="margin-bottom:0">
+    <a class="btn" href="{% url 'ls:codes' %}">Коды</a>
+    <a class="btn" href="{% url 'ls:cards' %}">Карты</a>
+    <a class="btn" href="{% url 'ls:known' %}">Что я знаю</a>
+    {% if has_radio %}<a class="btn" href="{% url 'ls:radio' %}">Эфир</a>{% endif %}
+  </p>
+</div>
+{% endblock %}
+{% block script %}
+<script>
+// Пост сам не обновляется, поэтому раз в 15 секунд перезагружаем его: так на нём появляются жетоны.
+setInterval(function () {
+  if (!document.hidden) location.reload();
+}, 15000);
+</script>
+{% endblock %}

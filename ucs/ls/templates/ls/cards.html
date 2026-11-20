@@ -1,0 +1,24 @@
+{% extends "ls/base.html" %}
+{% block title %}Карты · {{ player.callsign }}{% endblock %}
+{% block content %}
+<h2>Карты сопротивления</h2>
+<div class="panel row">
+  <div class="grow">В руке: <strong class="mono" style="font-size:24px">{{ player.cards }}</strong></div>
+  {% if not started %}<span class="mono" style="color:var(--accent)">Ожидание сеанса</span>{% endif %}
+</div>
+<div class="params">
+  {% for k in kinds %}
+  <form method="post" class="panel row" style="margin:0">
+    {% csrf_token %}
+    <input type="hidden" name="kind" value="{{ k.key }}">
+    <div class="grow">
+      <strong>{{ k.title }}</strong>
+      <div class="dim" style="font-size:14px">{{ k.hint }}</div>
+    </div>
+    <button class="primary"{% if player.cards < 1 %} disabled{% endif %}>Потратить 1</button>
+  </form>
+  {% endfor %}
+</div>
+<p class="dim">Если пакет закрыт, ответ будет «Пока нет», и карта останется у вас. Полученное хранится на странице «Что я знаю».</p>
+<p><a class="btn" href="{% url 'ls:known' %}">Что я знаю</a></p>
+{% endblock %}

@@ -1,0 +1,109 @@
+{% extends "ls/master_base.html" %}
+{% load ls_extras %}
+{% block title %}Мастер · {{ game.title }}{% endblock %}
+{% block style %}
+  td form { margin: 0; display: inline-flex; gap: 2px; align-items: center; }
+  .cellv { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .cellv .v { min-width: 3.2ch; text-align: center; }
+  .cellv .v.closed { color: var(--warn); }
+  .cellv .v.auto { color: var(--ok); }
+{% endblock %}
+{% block content %}
+<div class="row">
+  <h2 class="grow" style="margin:0">{{ game.title }} <span class="dim mono">{{ game.code }}</span></h2>
+</div>
+<div class="panel row" style="margin-top:14px">
+  <div>Игровое время: <strong class="mono" style="font-size:22px">{{ minutes }}</strong>
+    <span class="dim mono">сдвиг {{ offset_minutes }} мин</span></div>
+  <form method="post" action="{% url 'ls:master_action' game.pk %}" class="row">
+    {% csrf_token %}
+    <button name="op" value="start" class="primary"{% if game.is_started %} disabled{% endif %}>Старт</button>
+    <button name="op" value="clock" formaction="{% url 'ls:master_action' game.pk %}" onclick="this.form.delta.value=-300">&minus;5 мин</button>
+    <button name="op" value="clock" onclick="this.form.delta.value=300">+5 мин</button>
+    <input type="hidden" name="delta" value="0">
+  </form>
+  <a class="btn" href="">Обновить</a>
+</div>
+
+<h2>Темнота</h2>
+<form method="post" action="{% url 'ls:master_action' game.pk %}" class="panel">
+  {% csrf_token %}
+  <input type="hidden" name="op" value="dark">
+  <div class="row" style="align-items:flex-start">
+    {% for f in flights %}
+    <div class="grow">
+      <strong>{{ f.flight.name }}</strong>
+      {% for p in f.players %}
+      <div><label><input type="checkbox" name="players" value="{{ p.pk }}"> {{ p.callsign }}{% if p.is_imp %} <span class="tag">ИМП</span>{% endif %}</label></div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  <p class="row" style="margin-bottom:0"><button class="primary">В темноту</button>
+    <span class="dim" style="font-size:13px">Каждому отмеченному выдаётся по два жетона.</span></p>
+</form>
+<div class="panel table-wrap">
+  <table>
+    <tr><th>Время</th><th>Группа</th></tr>
+    {% for d in dark_entries %}
+    <tr><td class="mono">{{ d.created_at|date:"H:i:s" }}</td>
+      <td>{% for p in d.players.all %}{{ p.callsign }}{% if not forloop.last %}, {% endif %}{% endfor %}</td></tr>
+    {% empty %}
+    <tr><td colspan="2" class="dim">В темноту пока никого не отправляли.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<h2>Игроки</h2>
+<div class="panel table-wrap">
+<table>
+  <tr><th>Позывной</th><th>Имя</th><th>Пол</th><th>Звено</th><th>Символ</th>
+    <th>Навигация</th><th>Движение</th><th>Части</th><th>Огонь</th>
+    <th>Карты</th><th>Рация</th><th>Покупок</th><th>Архив</th></tr>
+  {% for p in players %}
+  <tr id="p{{ p.pk }}">
+    <td><a href="{% url 'ls:master_player' game.pk p.pk %}">{{ p.callsign }}</a>{% if p.is_imp %} <span class="tag">ИМП</span>{% endif %}</td>
+    <td>{{ p.character_name }}</td>
+    <td>
+      <form method="post" action="{% url 'ls:master_action' game.pk %}">
+        {% csrf_token %}<input type="hidden" name="player" value="{{ p.pk }}">
+        <span class="cellv">
+          <button class="small{% if p.gender == 'm' %} primary{% endif %}" name="op" value="gender:m"{% if p.gender == 'm' %} disabled{% endif %}>м</button>
+          <button class="small{% if p.gender == 'f' %} primary{% endif %}" name="op" value="gender:f"{% if p.gender == 'f' %} disabled{% endif %}>ж</button>
+        </span>
+      </form>
+    </td>
+    <td>{{ p.flight.name }}</td>
+    <td>{% symbol_icon p.symbol 18 %} {{ p.symbol|symbol_name }}</td>
+    {% for c in p.sync_cells %}
+    <td>
+      <form method="post" action="{% url 'ls:master_action' game.pk %}">
+        {% csrf_token %}<input type="hidden" name="player" value="{{ p.pk }}">
+        <span class="cellv">
+          <button class="small" name="op" value="sync:{{ c.key }}:-25" title="−25">&minus;</button>
+          <span class="v mono {{ c.mode }}">{{ c.value }}</span>
+          <button class="small" name="op" value="sync:{{ c.key }}:25" title="+25">+</button>
+        </span>
+      </form>
+    </td>
+    {% endfor %}
+    <td>
+      <form method="post" action="{% url 'ls:master_action' game.pk %}">
+        {% csrf_token %}<input type="hidden" name="player" value="{{ p.pk }}">
+        <span class="cellv"><button class="small" name="op" value="cards:-1">&minus;</button><span class="v mono">{{ p.cards }}</span><button class="small" name="op" value="cards:1">+</button></span>
+      </form>
+    </td>
+    <td>
+      <form method="post" action="{% url 'ls:master_action' game.pk %}">
+        {% csrf_token %}<input type="hidden" name="player" value="{{ p.pk }}">
+        <span class="cellv"><button class="small" name="op" value="radio:-1">&minus;</button><span class="v mono">{{ p.radio_level }}</span><button class="small" name="op" value="radio:1">+</button></span>
+      </form>
+    </td>
+    <td>{{ p.purchase_count }}</td>
+    <td>{{ p.archive_count }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+<p class="dim" style="font-size:13px">Пол можно менять в любой момент, но уже выданные пакеты памяти, досье, программы и записи архива не перерисовываются: текст подставляется при выдаче. Записи архива в «Что я знаю» берут пол на момент показа.</p>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "ls/base.html" %}
+{% load ls_extras %}
+{% block title %}Коды · {{ player.callsign }}{% endblock %}
+{% block content %}
+<h2>Коды</h2>
+{% include 'ls/_dark_tokens.html' %}
+<div class="panel row">
+  <div>{% symbol_icon player.symbol 48 %}</div>
+  <div class="grow">
+    <div class="mono dim">Ваш символ</div>
+    <div style="font-size:20px">{{ player.symbol|symbol_name }}</div>
+  </div>
+  <div>Карты: <strong class="mono">{{ player.cards }}</strong></div>
+</div>
+<form method="post" class="panel">
+  {% csrf_token %}
+  {% if blocked_seconds %}
+  <p class="mono" style="color:var(--warn);margin-top:0">Поле закрыто. Подождите {{ blocked_seconds }} с.</p>
+  {% endif %}
+  <label class="field">Код. Можно несколько через пробел.
+    <input type="text" name="codes" autocomplete="off" inputmode="numeric" spellcheck="false"{% if blocked_seconds %} disabled{% elif not messages %} autofocus{% endif %}>
+  </label>
+  <button class="primary"{% if blocked_seconds %} disabled{% endif %}>Ввести</button>
+</form>
+<p class="dim">Число, которое вам сказали, может быть жетоном или кодом архива. Жетон, символ которого совпал с вашим, даёт карту сопротивления, остальные сгорают. Жетон действует {{ ttl_minutes }} минут с выдачи. Код архива открывает запись, если она уже доступна.</p>
+{% endblock %}
+{% block script %}
+{% if blocked_seconds %}
+<script>
+// Когда блокировка кончится, страница обновится и поле снова откроется.
+setTimeout(function () { location.reload(); }, {{ blocked_seconds }} * 1000 + 500);
+</script>
+{% endif %}
+{% endblock %}

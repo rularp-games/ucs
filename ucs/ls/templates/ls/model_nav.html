@@ -1,0 +1,79 @@
+{% extends "ls/model_base.html" %}
+{% block instruction %}Нажмите клетки маяков по порядку, затем точку выхода. Буква — столбец, цифра — строка.{% endblock %}
+{% block style %}
+  .map { width: 100%; max-width: 720px; display: block; background: #070b11; border: 1px solid var(--line); border-radius: 4px; touch-action: manipulation; }
+  .map .cell { fill: transparent; stroke: var(--line); stroke-width: 1; cursor: pointer; }
+  .map .cell:hover { fill: rgba(108,180,230,.12); }
+  .map .cell.picked { fill: rgba(108,180,230,.3); stroke: var(--accent); }
+  .map .star { fill: #8fa3bd; opacity: .7; pointer-events: none; }
+  .map .lbl { fill: var(--dim); font: 11px ui-monospace, monospace; pointer-events: none; }
+  .map .num { fill: #fff; font: 600 16px ui-monospace, monospace; pointer-events: none; text-anchor: middle; }
+  .task-line { font-size: 18px; }
+  .task-line b { color: var(--accent); font-family: ui-monospace, monospace; }
+{% endblock %}
+{% block task %}
+{% if not auto %}
+<div class="panel task-line">
+  {% if not short %}Маяки: <b>{{ beacons_text }}</b><br>{% endif %}
+  Точка выхода: <b>{{ task.exit }}</b>
+</div>
+<svg class="map" id="map" viewBox="-20 -20 {{ width|add:30 }} {{ height|add:30 }}" role="img" aria-label="Карта 12 на 8">
+  {% for s in stars %}<circle class="star" cx="{{ s.x }}" cy="{{ s.y }}" r="1.6"/>{% endfor %}
+  {% for c in cells %}<rect class="cell" data-cell="{{ c.label }}" x="{{ c.x }}" y="{{ c.y }}" width="{{ cell }}" height="{{ cell }}"/>{% endfor %}
+  {% for l in col_labels %}<text class="lbl" x="{{ l.x }}" y="-6" text-anchor="middle">{{ l.text }}</text>{% endfor %}
+  {% for l in row_labels %}<text class="lbl" x="-8" y="{{ l.y }}" text-anchor="end">{{ l.text }}</text>{% endfor %}
+  <g id="marks"></g>
+</svg>
+<form method="post" id="answer-form" class="row" style="margin-top:14px">
+  {% csrf_token %}
+  <input type="hidden" name="answer" id="answer" value="">
+  <button type="button" id="reset">Сброс</button>
+  <button class="primary" id="confirm" disabled>Подтвердить</button>
+  <span class="mono dim" id="progress"></span>
+</form>
+{% endif %}
+{% endblock %}
+{% block script %}
+{% if not auto %}
+<script>
+(function () {
+  var need = {{ need }};
+  var cell = {{ cell }};
+  var seq = [];
+  var map = document.getElementById('map');
+  var marks = document.getElementById('marks');
+  var answer = document.getElementById('answer');
+  var confirmBtn = document.getElementById('confirm');
+  var progress = document.getElementById('progress');
+  var NS = 'http://www.w3.org/2000/svg';
+
+  function redraw() {
+    marks.innerHTML = '';
+    map.querySelectorAll('.cell').forEach(function (r) {
+      var i = seq.indexOf(r.dataset.cell);
+      r.classList.toggle('picked', i >= 0);
+      if (i >= 0) {
+        var t = document.createElementNS(NS, 'text');
+        t.setAttribute('class', 'num');
+        t.setAttribute('x', +r.getAttribute('x') + cell / 2);
+        t.setAttribute('y', +r.getAttribute('y') + cell / 2 + 6);
+        t.textContent = i + 1;
+        marks.appendChild(t);
+      }
+    });
+    answer.value = seq.join(',');
+    confirmBtn.disabled = seq.length !== need;
+    progress.textContent = seq.length + ' / ' + need;
+  }
+  map.addEventListener('click', function (e) {
+    var label = e.target.dataset && e.target.dataset.cell;
+    if (!label || seq.length >= need || seq.indexOf(label) >= 0) return;
+    seq.push(label);
+    redraw();
+  });
+  document.getElementById('reset').addEventListener('click', function () { seq = []; redraw(); });
+  redraw();
+})();
+</script>
+{% endif %}
+{% endblock %}
