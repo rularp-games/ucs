@@ -8,6 +8,7 @@ from functools import wraps
 
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
+from django.db import transaction
 from django.db.models import Count
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
@@ -16,12 +17,12 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from . import engine, services
-from .loader import GENDERS, ContentError, available_contents, get_content, render_gender
+from .loader import (DOSSIER_PART_TITLES, GENDERS, MEMORY_THEME_TITLES, ContentError, available_contents,
+                     get_content, render_gender)
 from .models import TOKEN_TTL, Game, Player, RadioMessage
 from .services import LEVEL_BAD, LEVEL_OK
 
 SESSION_KEY = 'ls_player_id'
-TASK_KEY = 'ls_task_{}'
 RADIO_LIMIT = 100
 DARK_LIMIT = 10
 
@@ -110,9 +111,10 @@ def logout_view(request):
 def post(request):
     player = request.player
     values = player.sync_values()
+    minutes = player.game.game_minutes()
     params = []
     for key in engine.PARAMS:
-        mode = engine.mode_of(values, key)
+        mode = engine.mode_of(values, key, minutes)
         params.append({
             'key': key,
             'title': engine.PARAM_TITLES[key],
@@ -124,46 +126,96 @@ def post(request):
     return render_player(request, 'ls/post.html', {
         'params': params,
         'dark_tokens': services.active_tokens(player),
+        'summaries': services.background_summaries(player),
         'active': 'post',
     })
 
 
 # --- Модели тренировок ------------------------------------------------------
 
-NAV_CELL = 50
+NAV_CELL = 50          # клетка поля в единицах SVG
+NAV_MARGIN = 34        # поле для подписей столбцов и строк
+NAV_CARD_PAD = 0.45    # запас вокруг созвездия на карточке, клетки
+
+
+def _field_context() -> dict:
+    """Общая разметка книжного поля 8 × 11 (навигация и восприятие): клетки, подписи, размеры."""
+    width, height = engine.NAV_COLS * NAV_CELL, engine.NAV_ROWS * NAV_CELL
+    return {
+        'cells': [{'label': engine.cell_label(c, r), 'x': c * NAV_CELL, 'y': r * NAV_CELL}
+                  for r in range(engine.NAV_ROWS) for c in range(engine.NAV_COLS)],
+        'cell': NAV_CELL,
+        'width': width,
+        'height': height,
+        'margin': NAV_MARGIN,
+        'view_w': width + NAV_MARGIN + 6,
+        'view_h': height + NAV_MARGIN + 6,
+        'col_labels': [{'text': chr(ord('A') + c), 'x': c * NAV_CELL + NAV_CELL // 2}
+                       for c in range(engine.NAV_COLS)],
+        'row_labels': [{'text': r + 1, 'y': r * NAV_CELL + NAV_CELL // 2 + 7}
+                       for r in range(engine.NAV_ROWS)],
+    }
 
 
 def _nav_context(task: dict) -> dict:
-    cells = [
-        {'label': engine.cell_label(c, r), 'x': c * NAV_CELL, 'y': r * NAV_CELL}
-        for r in range(engine.NAV_ROWS) for c in range(engine.NAV_COLS)
-    ]
+    field = _field_context()
+    cards = []
+    for n, card in enumerate(task['cards']):
+        extent = max(max(abs(x), abs(y)) for x, y in card['points']) + NAV_CARD_PAD
+        size = round(2 * extent * NAV_CELL, 1)
+        cards.append({
+            'number': n + 1,
+            'size': size,
+            'half': round(size / 2, 1),
+            # Карточка в масштабе 1:1 с полем: её ширина — доля ширины поля.
+            'width_pct': round(100 * size / field['view_w'], 2),
+            'points': [{'x': round(x * NAV_CELL, 1), 'y': round(y * NAV_CELL, 1)} for x, y in card['points']],
+        })
+    target = None
+    if task['target']:
+        t = task['target']
+        cx, cy = (t['x'] + 0.5) * NAV_CELL, (t['y'] + 0.5) * NAV_CELL
+        target = {'x': cx, 'y': cy, 'x2': cx + t['dx'] * NAV_CELL, 'y2': cy + t['dy'] * NAV_CELL,
+                  'rx': cx - 9, 'ry': cy - 9, 'lx': min(cx + 12, NAV_CELL * (engine.NAV_COLS - 3)),
+                  'ly': cy - 12 if cy > NAV_CELL else cy + 26}
     return {
-        'cells': cells,
-        'cell': NAV_CELL,
-        'width': engine.NAV_COLS * NAV_CELL,
-        'height': engine.NAV_ROWS * NAV_CELL,
-        'col_labels': [{'text': chr(ord('A') + c), 'x': c * NAV_CELL + NAV_CELL // 2}
-                       for c in range(engine.NAV_COLS)],
-        'row_labels': [{'text': r + 1, 'y': r * NAV_CELL + NAV_CELL // 2 + 4}
-                       for r in range(engine.NAV_ROWS)],
+        **field,
         'stars': [{'x': round(x * NAV_CELL, 1), 'y': round(y * NAV_CELL, 1)} for x, y in task['stars']],
-        'beacons_text': ', '.join(task['beacons']),
+        'highlight': [{'x': round(x * NAV_CELL, 1), 'y': round(y * NAV_CELL, 1)} for x, y in task['highlight']],
+        'beacon_lines': [{'number': n + 1, 'text': text} for n, text in enumerate(task['beacon_text'])],
+        'nav_cards': cards,
+        'target_mark': target,
         'need': len(task['beacons']) + 1,
     }
 
 
-def _parts_context(task: dict) -> dict:
+def _sense_context(task: dict) -> dict:
+    field = _field_context()
+    frames = [[{'x': round(x * NAV_CELL, 1), 'y': round(y * NAV_CELL, 1), 'r': round(2.0 * k, 2)}
+               for x, y, k in frame]
+              for frame in task['frames']]
     return {
-        'switches': [
-            {'index': i, 'name': name, 'on': task['initial'][i]}
-            for i, name in enumerate(engine.SWITCHES)
-        ],
-        'checklist': [item['label'] for item in task['items']],
+        **field,
+        'frames': frames,
+        'glow': task['glow'],
+        'need': task['need'],
+        'frame_ms': engine.SENSE_FRAME_MS,
     }
 
 
-def _fire_context(task: dict) -> dict:
+def _parts_context(task: dict) -> dict:
+    switches = []
+    for i, name in enumerate(task['switches']):
+        words = engine.switch_words(name)
+        switches.append({'index': i, 'name': name, 'on': task['initial'][i], 'on_word': words[2],
+                         'off_word': words[3]})
+    return {
+        'switches': switches,
+        'checklist': [{'index': n, 'label': item['label']} for n, item in enumerate(task['items'])],
+    }
+
+
+def _fire_context(task: dict, now: float) -> dict:
     targets = []
     for index, target in enumerate(task['targets']):
         targets.append({
@@ -171,60 +223,106 @@ def _fire_context(task: dict) -> dict:
             'index': index,
             'number': index + 1,
             'code_text': target['code'] or 'нет',
-            'shape_title': engine.SHAPE_TITLES[target['shape']],
         })
-    return {'targets': targets, 'criteria_text': engine.criteria_text(task['criteria'])}
+    reference = [
+        {'klass': k, 'shapes': [{'key': s, 'title': engine.SHAPE_TITLES[s]}
+                                for s in engine.SHAPES if engine.SHAPE_CLASS[s] == k]}
+        for k in engine.KLASSES
+    ]
+    limit = task.get('time_limit')
+    return {
+        'targets': targets,
+        'criteria_text': engine.criteria_text(task['criteria']),
+        'reference': reference,
+        'reasons': [{'key': r, 'title': engine.FIRE_REASON_TITLES[r]} for r in engine.FIRE_REASONS
+                    if r != 'sector' or task['criteria']['sector']],
+        'time_left': max(0, round(limit - (now - task['issued_at']))) if limit else None,
+    }
 
 
-def _new_task(param: str, mode: str, sync: int) -> dict:
+def _new_task(param: str, level: int, stage: int, game: Game, now: float) -> dict:
+    """Новая задача по уровню синхронизации и этапу игры. Зерно случайное, задача целиком на сервере."""
     seed = random.getrandbits(32)
     if param == 'nav':
-        task = engine.gen_nav(seed, mode)
+        task = engine.gen_nav(seed, level, stage)
     elif param == 'move':
-        task = engine.gen_move(seed, mode, time.time())
+        task = engine.gen_move(seed, level, stage, now, engine.hall_seed(game.pk, game.game_minutes(), 'move'))
     elif param == 'parts':
-        task = engine.gen_parts(seed, mode, sync)
+        task = engine.gen_parts(seed, level, stage, engine.hall_seed(game.pk, game.game_minutes(), 'parts'))
+    elif param == 'sense':
+        task = engine.gen_sense(seed, level, stage)
     else:
-        task = engine.gen_fire(seed, mode)
-    task['mode'] = mode
+        task = engine.gen_fire(seed, level, stage)
+    task.update({'level': level, 'stage': stage, 'issued_at': now})
     return task
 
 
-def _check_task(param: str, task: dict, data) -> bool:
-    """Серверная проверка ответа: данные формы разбираются и сверяются с задачей."""
+def _check_task(param: str, task: dict, data, now: float) -> tuple[bool, str]:
+    """Серверная проверка ответа: данные формы разбираются и сверяются с задачей.
+
+    Возвращает успех и строку для экрана итога (обычно пустую).
+    """
     if param == 'nav':
-        return engine.check_nav(task, data.get('answer', ''))
+        return engine.check_nav(task, data.get('answer', '')), ''
     if param == 'move':
-        try:
-            elapsed = float(data.get('elapsed', '0'))
-        except ValueError:
-            return False
-        return engine.check_move(task, data.get('result', ''), elapsed, time.time())
+        return engine.check_move(task, data.get('record', ''), now), ''
     if param == 'parts':
-        state = engine.parse_parts_answer(data.get('answer', ''))
-        return state is not None and engine.check_parts(task, state)
-    return engine.check_fire(task, data.get('answer', ''))
+        state = engine.parse_parts_answer(data.get('answer', ''), len(task['switches']))
+        marked = engine.parse_marked(data.get('missing', ''))
+        return state is not None and engine.check_parts(task, state, marked), ''
+    if param == 'sense':
+        success = engine.check_sense(task, data.get('answer', ''))
+        return success, engine.sense_note(task, success, task['stage'])
+    answer = data.get('answer', '')
+    success = engine.check_fire(task, answer, now - task['issued_at'])
+    return success, engine.fire_note(task, answer, success, task['stage'])
 
 
-def _model_result(request, param: str, before: int, kind: str):
+def _take_task(player: Player, param: str) -> dict | None:
+    """Снять выданную задачу атомарно: один ответ на одну задачу, даже при двойной отправке."""
+    with transaction.atomic():
+        fresh = Player.objects.select_for_update().get(pk=player.pk)
+        task = fresh.tasks.pop(param, None)
+        if task is not None:
+            fresh.save(update_fields=['tasks'])
+    player.tasks = fresh.tasks
+    return task
+
+
+def _current_task(player: Player, param: str, level: int, stage: int, now: float) -> dict:
+    """Выданная задача или новая. Новая выдаётся только если прежней нет (ответ или отказ сняли её)
+    или если уровень игрока с тех пор изменился (мастер поправил синхронизацию)."""
+    with transaction.atomic():
+        fresh = Player.objects.select_for_update().select_related('game').get(pk=player.pk)
+        task = fresh.tasks.get(param)
+        if not task or task.get('level') != level:
+            task = _new_task(param, level, stage, fresh.game, now)
+            fresh.tasks[param] = task
+            fresh.save(update_fields=['tasks'])
+    player.tasks = fresh.tasks
+    return task
+
+
+def _model_result(request, param: str, before: dict[str, int], kind: str, *, capped: bool = False,
+                  card: bool = False, note: str = ''):
     """Страница итога: «Выполнено», «Провал» или «Отказ принят»."""
     player = Player.objects.select_related('game', 'flight').get(pk=request.player.pk)
     request.player = player
     values = player.sync_values()
-    index = engine.PARAMS.index(param)
-    unlocked = ''
-    if index + 1 < len(engine.PARAMS):
-        nxt = engine.PARAMS[index + 1]
-        was = engine.is_open({**values, param: before}, nxt)
-        if engine.is_open(values, nxt) and not was:
-            unlocked = engine.PARAM_TITLES[nxt]
+    minutes = player.game.game_minutes()
+    unlocked = [engine.PARAM_TITLES[key] for key in engine.PARAMS
+                if key != param and engine.is_open(values, key, minutes) and not engine.is_open(before, key, minutes)]
     return render_player(request, 'ls/model_result.html', {
         'param': param,
         'param_title': engine.PARAM_TITLES[param],
         'kind': kind,
         'value': values[param],
-        'mode': engine.mode_of(values, param),
-        'unlocked': unlocked,
+        'mode': engine.mode_of(values, param, minutes),
+        'unlocked': ', '.join(unlocked),
+        'capped': capped,
+        'card': card,
+        'note': note,
+        'pause': services.pause_seconds(player, param) if kind == 'fail' else 0,
         'active': 'post',
     })
 
@@ -234,33 +332,36 @@ def model(request, param):
     if param not in engine.PARAMS:
         raise Http404
     player = request.player
-    mode = engine.mode_of(player.sync_values(), param)
+    mode = engine.mode_of(player.sync_values(), param, player.game.game_minutes())
     if mode == engine.MODE_CLOSED:
         messages.warning(request, f'Параметр «{engine.PARAM_TITLES[param]}» закрыт.')
         return redirect('ls:post')
-    session_key = TASK_KEY.format(param)
+    level = player.get_sync(param)
+    stage = services.stage_of(player.game)
 
     if request.method == 'POST':
         if mode == engine.MODE_AUTO:
             return redirect('ls:model', param=param)
-        before = player.get_sync(param)
+        before = player.sync_values()
         if request.POST.get('action') == 'refuse':
-            request.session.pop(session_key, None)
-            services.apply_deviation(player, param)
-            return _model_result(request, param, before, 'deviation')
-        task = request.session.get(session_key)
-        if not task or task.get('mode') != mode:
+            task = _take_task(player, param)
+            summary = engine.attempt_summary(task) if task else {'stage': stage}
+            card = services.apply_deviation(player, param, stage, summary)
+            return _model_result(request, param, before, 'deviation', card=card)
+        task = _take_task(player, param)
+        if not task or task.get('level') != level:
             return redirect('ls:model', param=param)
-        request.session.pop(session_key, None)
-        success = _check_task(param, task, request.POST)
-        services.record_attempt(player, param, success)
-        return _model_result(request, param, before, 'success' if success else 'fail')
+        now = time.time()
+        success, note = _check_task(param, task, request.POST, now)
+        summary = engine.attempt_summary(task, request.POST, now - task['issued_at'])
+        capped = services.record_attempt(player, param, success, stage, summary)
+        return _model_result(request, param, before, 'success' if success else 'fail', capped=capped, note=note)
 
     context = {
         'param': param,
         'param_title': engine.PARAM_TITLES[param],
         'model_title': engine.MODEL_TITLES[param],
-        'value': player.get_sync(param),
+        'value': level,
         'mode': mode,
         'auto': mode == engine.MODE_AUTO,
         'instruction': mode == engine.MODE_INSTRUCTION,
@@ -270,17 +371,21 @@ def model(request, param):
     if mode == engine.MODE_AUTO:
         return render_player(request, f'ls/model_{param}.html', context)
 
-    task = request.session.get(session_key)
-    if request.GET.get('new') or not task or task.get('mode') != mode:
-        task = _new_task(param, mode, player.get_sync(param))
-        request.session[session_key] = task
+    if param not in player.tasks:
+        pause = services.pause_seconds(player, param)
+        if pause:
+            return render_player(request, 'ls/model_pause.html', {**context, 'pause': pause})
+    now = time.time()
+    task = _current_task(player, param, level, stage, now)
     context['task'] = task
     if param == 'nav':
         context.update(_nav_context(task))
     elif param == 'parts':
         context.update(_parts_context(task))
+    elif param == 'sense':
+        context.update(_sense_context(task))
     elif param == 'fire':
-        context.update(_fire_context(task))
+        context.update(_fire_context(task, now))
     return render_player(request, f'ls/model_{param}.html', context)
 
 
@@ -302,42 +407,78 @@ def codes(request):
 
 
 CARD_KINDS = [
-    ('self', 'О себе', 'Следующий пакет памяти вашего персонажа.'),
-    ('flight', 'О звене', 'Следующая карточка досье на кого-то из звена. Чей это позывной, не сказано.'),
-    ('program', 'О программе', 'Следующий пакет о программе и мире вокруг неё.'),
+    ('self', 'О себе', 'Одна тема памяти на выбор. Каждая тема один раз, предыдущие покупать не нужно. '
+                       'Первые два фрагмента бесплатны, они на странице «Что я знаю».'),
+    ('flight', 'О звене', 'Новое дело на кого-то из звена или продолжение уже открытого. '
+                          'Чей это позывной, не сказано.'),
+    ('program', 'О программе', 'Один из трёх вопросов, каждый один раз. Фоновые сводки приходят сами.'),
     ('archive', 'Архив', 'Следующая запись из очереди архива. Записи вне очереди открываются только кодом.'),
     ('radio', 'Рация', 'Первая покупка открывает эфир, вторая позволяет пользоваться рацией и на посту.'),
 ]
 
 
+def _card_options(player: Player) -> dict[str, list[services.Option]]:
+    minutes = player.game.game_minutes()
+    return {
+        'self': services.memory_options(player, minutes),
+        'flight': services.flight_options(player, minutes),
+        'program': services.program_options(player, minutes),
+    }
+
+
 @player_required
 def cards(request):
     if request.method == 'POST':
-        flash(request, services.buy(request.player, request.POST.get('kind', '')))
+        flash(request, services.buy(request.player, request.POST.get('kind', ''), request.POST.get('choice', '')))
         return redirect('ls:cards')
-    kinds = [{'key': k, 'title': t, 'hint': h} for k, t, h in CARD_KINDS]
+    options = _card_options(request.player)
+    kinds = [{'key': k, 'title': t, 'hint': h, 'options': options.get(k)} for k, t, h in CARD_KINDS]
     return render_player(request, 'ls/cards.html', {'kinds': kinds, 'active': 'cards'})
+
+
+def _known_sections(player: Player) -> list[dict]:
+    """«Что я знаю»: память, досье по делам, программа. Группа — подзаголовок с карточками."""
+    content = get_content(player.game.content_name)
+    purchases = list(player.purchases.all())
+
+    memory = [{'title': f['title'], 'text': f['text']} for f in services.free_memory(player)]
+    memory += [{'title': MEMORY_THEME_TITLES.get(p.key, 'Память'), 'text': p.payload}
+               for p in purchases if p.kind == 'self']
+
+    by_key = {p.key: p.payload for p in purchases if p.kind == 'flight' and p.key}
+    cases = []
+    for case in services.dossier_cases_of(player):
+        cases.append({'title': case['label'], 'items': [
+            {'title': DOSSIER_PART_TITLES[part], 'text': by_key[f'{case["character_id"]}:{part}']}
+            for part in case['parts']]})
+    old = [{'title': '', 'text': p.payload} for p in purchases if p.kind == 'flight' and not p.key]
+    if old:
+        cases.append({'title': 'Прежние карточки', 'items': old})
+
+    questions = {q.id: q.title for q in content.program_questions}
+    program = [{'title': 'Сводки', 'items': services.background_summaries(player)}]
+    asked = [{'title': questions.get(p.key, ''), 'text': p.payload} for p in purchases if p.kind == 'program']
+    if asked:
+        program.append({'title': 'Вопросы', 'items': asked})
+
+    return [
+        {'key': 'self', 'title': 'О себе', 'groups': [{'title': '', 'items': memory}]},
+        {'key': 'flight', 'title': 'О звене', 'groups': cases},
+        {'key': 'program', 'title': 'О программе', 'groups': program},
+    ]
 
 
 @player_required
 def known(request):
     player = request.player
-    streams = [
-        ('self', 'О себе'),
-        ('flight', 'О звене'),
-        ('program', 'О программе'),
-    ]
-    sections = [
-        {'title': title, 'items': list(player.purchases.filter(kind=kind))}
-        for kind, title in streams
-    ]
     entries = {e.code: e for e in get_content(player.game.content_name).archive}
     genders = services.game_genders(player.game)
     archive = [
         {'code': o.code, 'title': entries[o.code].title, 'text': render_gender(entries[o.code].text, genders)}
         for o in player.archive_opens.all() if o.code in entries
     ]
-    return render_player(request, 'ls/known.html', {'sections': sections, 'archive': archive, 'active': 'known'})
+    return render_player(request, 'ls/known.html', {
+        'sections': _known_sections(player), 'archive': archive, 'active': 'known'})
 
 
 @player_required
@@ -423,16 +564,20 @@ def _character_name(content, player: Player) -> str:
 @staff_member_required
 def master_game(request, game_id):
     game = get_object_or_404(Game, pk=game_id)
+    minutes = game.game_minutes()
+    stage = engine.stage(minutes)
     players = list(game.players.select_related('flight').annotate(
         purchase_count=Count('purchases', distinct=True),
         archive_count=Count('archive_opens', distinct=True),
     ))
     content = get_content(game.content_name)
+    debrief = services.debrief(game)
     for p in players:
         p.character_name = _character_name(content, p)
+        p.debrief = debrief[p.pk]
         p.sync_cells = [
             {'key': key, 'title': engine.PARAM_TITLES[key], 'value': p.get_sync(key),
-             'mode': engine.mode_of(p.sync_values(), key)}
+             'mode': engine.mode_of(p.sync_values(), key, minutes)}
             for key in engine.PARAMS
         ]
     flights = [{'flight': f, 'players': [p for p in players if p.flight_id == f.pk]}
@@ -442,8 +587,11 @@ def master_game(request, game_id):
         'players': players,
         'flights': flights,
         'dark_entries': game.dark_entries.prefetch_related('players')[:DARK_LIMIT],
-        'minutes': format_minutes(game.game_minutes()),
+        'minutes': format_minutes(minutes),
         'offset_minutes': game.clock_offset_seconds // 60,
+        'stage': stage,
+        'stage_title': engine.STAGE_TITLES[stage],
+        'stage_cap': engine.stage_cap(stage),
     })
 
 
@@ -524,7 +672,7 @@ def master_player(request, game_id, player_id):
         'game': game,
         'player': player,
         'character_name': _character_name(get_content(game.content_name), player),
-        'attempts': player.attempts.all()[:200],
+        'attempts': [{'a': a, 'text': engine.summary_text(a.summary or {})} for a in player.attempts.all()[:200]],
         'purchases': player.purchases.all(),
         'tokens_issued': issued,
         'tokens_used': player.tokens_used.select_related('issued_to'),

@@ -1,24 +1,59 @@
 {% extends "ls/model_base.html" %}
 {% load ls_extras %}
-{% block instruction %}Найдите цель, подходящую под все критерии, и выполните пуск.{% endblock %}
+{% block instruction %}Класс цели определяется по силуэту, справочник ниже. Найдите цель, подходящую под все критерии, и нажмите «{{ task.verb }}». Код «нет» значит, что транспондер молчит: такого кода в списке нет.{% endblock %}
 {% block style %}
-  .targets { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+  .criteria { font: 17px ui-monospace, monospace; position: sticky; top: 0; z-index: 5; box-shadow: 0 6px 12px rgba(0,0,0,.45); }
+  .criteria b { color: var(--warn); }
+  .criteria .timer { float: right; margin-left: 12px; color: #e0a3a1; font-weight: 600; }
+  .targets { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr)); gap: 10px; }
   .tcard { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 12px; cursor: pointer; position: relative; }
   .tcard input { position: absolute; opacity: 0; pointer-events: none; }
   .tcard:has(input:checked) { border-color: var(--accent); background: #12263a; }
   .tcard:has(input:focus-visible) { outline: 2px solid var(--accent); }
   .tcard .no { font: 600 12px ui-monospace, monospace; color: var(--dim); }
-  .sil { width: 100%; height: 64px; color: #9fb4cc; display: block; margin: 6px 0; }
-  .tcard dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font: 13px ui-monospace, monospace; }
-  .tcard dt { color: var(--dim); }
-  .tcard dd { margin: 0; }
-  .vec { width: 30px; height: 30px; vertical-align: middle; color: var(--accent); }
-  .criteria { font: 17px ui-monospace, monospace; }
-  .criteria b { color: var(--warn); }
+  .sil { width: 100%; height: 72px; color: #9fb4cc; display: block; margin: 6px 0; }
+  .tcard .meta { font: 14px ui-monospace, monospace; display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: center; }
+  .tcard .meta .dim { margin-right: 2px; }
+  .tcard .unsigned { height: 72px; margin: 6px 0; display: flex; flex-direction: column; justify-content: center; font: 13px ui-monospace, monospace; color: var(--dim); }
+  .vec { width: 24px; height: 24px; vertical-align: middle; color: var(--accent); }
+  .tcard { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; min-height: 44px; }
+  .ref { position: relative; }
+  .ref .classes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .ref .kgroup { text-align: center; border: 1px solid var(--line); border-radius: 4px; padding: 6px 4px; }
+  .ref .kgroup b { font: 600 15px ui-monospace, monospace; }
+  .ref .ref-sil { width: 100%; height: 44px; color: #9fb4cc; display: block; }
+  .ref .kgroup span { display: block; font-size: 12px; color: var(--dim); line-height: 1.2; margin-bottom: 4px; }
+  .ref .sticker { position: absolute; right: 10px; bottom: 4px; font: 10px ui-monospace, monospace; color: #8a7a52; border: 1px solid #5a4f36; padding: 0 4px; transform: rotate(-3deg); background: #15130d; }
+  .reasons { display: flex; gap: 8px; flex-wrap: wrap; }
+  @media (max-width: 600px) {
+    /* две колонки: шесть целей в три ряда; критерии закреплены сверху */
+    .criteria { font-size: 15px; padding: 8px 10px; margin-left: -4px; margin-right: -4px; }
+    .targets { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .tcard { padding: 8px; }
+    .tcard .meta { font-size: 13px; gap: 2px 8px; }
+    .tcard .no { font-size: 12px; }
+    .sil, .tcard .unsigned { height: 48px; margin: 2px 0; }
+    .ref .ref-sil { height: 36px; }
+    #answer-form .row > button { flex: 1 1 100%; }
+    .reasons button { flex: 1 1 30%; }
+  }
 {% endblock %}
 {% block task %}
 {% if not auto %}
-<div class="panel criteria"><b>Чужой:</b> {{ criteria_text }}</div>
+<div class="panel criteria">{% if time_left is not None %}<span class="timer" id="timer">{{ time_left }} с</span>{% endif %}<b>Чужой:</b> {{ criteria_text }}{% if task.unsigned_rule %}<br><b>Цель без сигнатуры</b> в секторе — чужая.{% endif %}</div>
+{% if task.reference %}
+<div class="panel ref">
+  <div class="mono dim" style="margin-bottom:6px">Справочник силуэтов</div>
+  <div class="classes">
+    {% for k in reference %}
+    <div class="kgroup"><b>{{ k.klass }}</b>
+      {% for s in k.shapes %}{% silhouette s.key 0 'ref-sil' %}<span>{{ s.title }}</span>{% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class="sticker">форма 19-К</div>
+</div>
+{% endif %}
 <form method="post" id="answer-form">
   {% csrf_token %}
   <div class="targets">
@@ -26,26 +61,56 @@
     <label class="tcard">
       {% if not short %}<input type="radio" name="answer" value="{{ t.index }}" required>{% endif %}
       <div class="no">ЦЕЛЬ {{ t.number }}</div>
-      {% silhouette t.shape %}
-      <dl>
-        <dt>силуэт</dt><dd>класс {{ t.klass }}</dd>
-        <dt>код</dt><dd>{{ t.code_text }}</dd>
-        <dt>вектор</dt><dd>
-          <svg class="vec" viewBox="-20 -20 40 40" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate({{ t.vector }})"><path d="M0 14V-14M-6 -8L0 -14L6 -8"/></g></svg>
-          {{ t.vector }}°
-        </dd>
-      </dl>
+      {% if t.unsigned %}
+      <div class="unsigned"><span>оптика: нет</span><span>масса: есть</span></div>
+      {% else %}
+      {% silhouette t.shape t.rot %}
+      {% endif %}
+      <div class="meta">
+        {% if not t.unsigned %}<span><span class="dim">код</span>{{ t.code_text }}</span>{% endif %}
+        <span><svg class="vec" viewBox="-20 -20 40 40" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate({{ t.vector }})"><path d="M0 14V-14M-6 -8L0 -14L6 -8"/></g></svg>{{ t.vector }}°</span>
+      </div>
     </label>
     {% endfor %}
   </div>
+  {% if short %}
+  <p class="dim" style="margin:12px 0 6px">Подтвердить или отклонить. Отклоняя, назовите признак, который не сходится.</p>
+  <div class="row">
+    <button class="primary" name="answer" value="confirm">Подтвердить</button>
+  </div>
+  <div class="reasons" style="margin-top:10px">
+    {% for r in reasons %}<button name="answer" value="reject:{{ r.key }}">Отклонить: {{ r.title }}</button>{% endfor %}
+  </div>
+  {% else %}
   <p class="row" style="margin-top:14px">
-    {% if short %}
-      <button class="primary" name="answer" value="confirm">Подтвердить</button>
-      <button name="answer" value="reject">Отклонить</button>
-    {% else %}
-      <button class="primary">Пуск</button>
-    {% endif %}
+    <button class="primary">{{ task.verb }}</button>
   </p>
+  {% endif %}
 </form>
+{% endif %}
+{% endblock %}
+{% block script %}
+{% if not auto and time_left is not None %}
+<script>
+(function () {
+  // Время на решение. Сервер сверяет его сам; по истечении отправляем «время вышло».
+  var left = {{ time_left }};
+  var out = document.getElementById('timer');
+  var form = document.getElementById('answer-form');
+  function expire() {
+    form.querySelectorAll('[name=answer]').forEach(function (el) { el.disabled = true; });
+    var hidden = document.createElement('input');
+    hidden.type = 'hidden'; hidden.name = 'answer'; hidden.value = 'timeout';
+    form.appendChild(hidden);
+    form.submit();
+  }
+  if (left <= 0) { expire(); return; }
+  var timer = setInterval(function () {
+    left -= 1;
+    out.textContent = Math.max(0, left) + ' с';
+    if (left <= 0) { clearInterval(timer); expire(); }
+  }, 1000);
+})();
+</script>
 {% endif %}
 {% endblock %}

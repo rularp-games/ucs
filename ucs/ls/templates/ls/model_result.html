@@ -5,14 +5,44 @@
 {% if kind == 'success' %}<div class="big-result success">Выполнено</div>
 {% elif kind == 'fail' %}<div class="big-result fail">Провал</div>
 {% else %}<div class="big-result deviation">Отказ принят</div>{% endif %}
+{% if note %}<div class="panel mono note-line">{{ note|linebreaksbr }}</div>{% endif %}
 <div class="panel">
   <div class="row"><span class="grow">Синхронизация</span><span class="mono">{{ value }}%</span></div>
   <div class="bar {{ mode }}" style="margin-top:8px"><i style="width:{{ value }}%"></i></div>
+  {% if capped %}<p class="mono" style="color:#b39a58;margin-bottom:0">Предел калибровки на этом этапе.</p>{% endif %}
+  {% if kind == 'deviation' %}<p class="mono" style="margin-bottom:0">{% if card %}Получена карта сопротивления.{% else %}<span class="dim">Карты за этот отказ нет.</span>{% endif %}</p>{% endif %}
   {% if unlocked %}<p class="mono" style="color:var(--accent);margin-bottom:0">Доступно: {{ unlocked }}</p>{% endif %}
   {% if mode == 'auto' %}<p class="mono" style="color:var(--ok);margin-bottom:0">Автоматика</p>{% endif %}
 </div>
+{% if pause %}<p class="mono dim" id="pause-line">Перекалибровка: <span id="pause-left">{{ pause }}</span> с</p>{% endif %}
 <p class="row">
-  {% if mode != 'auto' %}<a class="btn primary" href="{% url 'ls:model' param %}?new=1">Следующая задача</a>{% endif %}
+  {% if mode != 'auto' %}<a class="btn primary{% if pause %} wait{% endif %}" id="next" href="{% url 'ls:model' param %}"{% if pause %} aria-disabled="true"{% endif %}>Следующая задача</a>{% endif %}
   <a class="btn" href="{% url 'ls:post' %}">К посту</a>
 </p>
+{% endblock %}
+{% block style %}
+  .note-line { border-color: var(--line); color: var(--ink); }
+  .btn.wait { opacity: .4; pointer-events: none; }
+  @media (max-width: 600px) {
+    p.row > .btn { flex: 1 1 100%; }
+  }
+{% endblock %}
+{% block script %}
+{% if pause %}
+<script>
+(function () {
+  // Пауза перекалибровки после провала: сервер всё равно не выдаст задачу раньше.
+  var left = {{ pause }};
+  var out = document.getElementById('pause-left');
+  var next = document.getElementById('next');
+  var timer = setInterval(function () {
+    left -= 1;
+    if (left > 0) { out.textContent = left; return; }
+    clearInterval(timer);
+    document.getElementById('pause-line').textContent = 'Перекалибровка завершена.';
+    if (next) { next.classList.remove('wait'); next.removeAttribute('aria-disabled'); }
+  }, 1000);
+})();
+</script>
+{% endif %}
 {% endblock %}

@@ -24,6 +24,10 @@
     font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   }
   a { color: var(--accent); }
+  html { -webkit-text-size-adjust: 100%; }
+  body { overflow-wrap: break-word; }
+  a, button, label, summary { touch-action: manipulation; -webkit-tap-highlight-color: rgba(108,180,230,.25); }
+  img, svg { max-width: 100%; }
   .mono, code, .tag, th { font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace; }
   header.top {
     border-bottom: 1px solid var(--line);
@@ -101,7 +105,38 @@
   .big-result.success { color: var(--ok); }
   .big-result.fail, .big-result.deviation { color: var(--warn); }
   .center { text-align: center; }
-  @media (max-width: 600px) { main { padding: 14px; } header.top { padding: 10px 14px; } }
+  @media (max-width: 600px) {
+    main { padding: 12px; }
+    header.top { padding: 8px 12px 4px; gap: 0 12px; }
+    header.top h1 { font-size: 12px; letter-spacing: .08em; padding: 6px 0; }
+    header.top nav { margin-left: 0; width: 100%; gap: 2px; justify-content: space-between; font-size: 15px; }
+    header.top nav a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 6px; border-bottom: 2px solid transparent; }
+    header.top nav form { margin: 0; }
+    h2 { margin: 18px 0 8px; }
+    .panel { padding: 12px; margin-bottom: 12px; }
+    .panel.auto { padding: 20px 12px; font-size: 18px; }
+    .btn, button { min-height: 44px; padding: 10px 16px; font-size: 15px; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; }
+    button.small { padding: 6px 12px; font-size: 14px; }
+    input[type=text], input[type=number], input[type=password], textarea, select { font-size: 16px; min-height: 44px; padding: 10px; }
+    .msgs li.payload { font-size: 16px; padding: 12px; }
+    .dark-tokens { gap: 10px; }
+    .dtoken { flex: 1 1 100%; padding: 12px 8px; }
+    .dtoken .num { font-size: clamp(34px, 12vw, 48px); letter-spacing: .12em; }
+    .big-result { font-size: 24px; padding: 16px 0; }
+    .row { gap: 10px; }
+    .params { gap: 12px; }
+    .param > div:first-child { min-width: 0; }
+    .param .btn { max-width: 100%; }
+    .protocol { font-size: 14px; }
+    th, td { padding: 6px; }
+    form.panel.row > button, form.panel.row > .btn { flex: 1 1 100%; }
+  }
+  @media (pointer: coarse), (max-width: 900px) {
+    /* планшет и телефон: кнопки не ниже 44 px (мелкие кнопки панели мастера не трогаем) */
+    .btn, button:not(.small) { min-height: 44px; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; }
+  }
   @media print {
     body { background: #fff; color: #000; }
     header.top, .noprint, .msgs { display: none !important; }

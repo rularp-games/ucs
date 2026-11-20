@@ -1,13 +1,27 @@
 {% extends "ls/model_base.html" %}
-{% block instruction %}Удерживайте шарик между метками. Стрелки влево и вправо.{% endblock %}
+{% block instruction %}Удерживайте шарик между красными метками. Кнопки ← и → наклоняют планку, отпущенная планка сама выравнивается.{% if task.physics.warn %} Перед толчком мигает стрелка: толкнёт в её сторону.{% endif %}{% endblock %}
 {% block style %}
   .rig { width: 100%; max-width: 720px; display: block; background: #070b11; border: 1px solid var(--line); border-radius: 4px; }
   .rig .plank { fill: #2a3a52; stroke: var(--accent); stroke-width: 1; }
+  .rig .plank.glitch { animation: flicker .18s steps(2) infinite; }
+  @keyframes flicker { 0% { opacity: 1; } 100% { opacity: .45; } }
   .rig .mark { stroke: var(--warn); stroke-width: 3; }
   .rig .ball { fill: #dbe7f3; }
+  .rig .warn { fill: #e5cf8f; opacity: 0; }
+  .rig .warn.on { animation: blink .25s steps(2) infinite; }
+  @keyframes blink { 0% { opacity: 1; } 100% { opacity: .1; } }
   .timer { font: 600 32px ui-monospace, monospace; }
   .pad { display: flex; gap: 12px; margin-top: 12px; }
-  .pad button { flex: 1; font-size: 28px; padding: 18px 0; touch-action: none; user-select: none; }
+  .pad button { flex: 1; font-size: 28px; padding: 18px 0; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .pad button.held { border-color: var(--accent); background: #17314a; }
+  .rig, .timer { -webkit-user-select: none; user-select: none; touch-action: none; }
+  @media (max-width: 600px) {
+    .timer { font-size: 28px; }
+    .pad { gap: 10px; position: sticky; bottom: 8px; }
+    .pad button { font-size: 40px; min-height: 96px; padding: 0; border-radius: 8px; }
+    #answer-form #start { flex: 1 1 100%; min-height: 56px; }
+    #answer-form .mono { flex: 1 1 100%; font-size: 14px; }
+  }
 {% endblock %}
 {% block task %}
 {% if not auto %}
@@ -16,10 +30,12 @@
   <span class="timer" id="timer">{{ task.seconds }}.0</span>
 </div>
 <svg class="rig" id="rig" viewBox="0 0 600 200" role="img" aria-label="Планка с шариком">
-  <line class="mark" x1="235" y1="60" x2="235" y2="150"/>
-  <line class="mark" x1="365" y1="60" x2="365" y2="150"/>
+  <line class="mark" id="mark-l" x1="232" y1="60" x2="232" y2="150"/>
+  <line class="mark" id="mark-r" x1="368" y1="60" x2="368" y2="150"/>
+  <polygon class="warn" id="warn-l" points="40,40 80,20 80,60"/>
+  <polygon class="warn" id="warn-r" points="560,40 520,20 520,60"/>
   <g id="tilt" transform="rotate(0 300 130)">
-    <rect class="plank" x="30" y="130" width="540" height="10" rx="3"/>
+    <rect class="plank" id="plank" x="30" y="130" width="540" height="10" rx="3"/>
     <circle class="ball" id="ball" cx="300" cy="118" r="12"/>
   </g>
   <polygon points="300,140 285,170 315,170" fill="#2a3a52"/>
@@ -30,84 +46,105 @@
 </div>
 <form method="post" id="answer-form" class="row" style="margin-top:14px">
   {% csrf_token %}
-  <input type="hidden" name="result" id="result" value="">
-  <input type="hidden" name="elapsed" id="elapsed" value="0">
+  <input type="hidden" name="record" id="record" value="">
   <button type="button" class="primary" id="start">Начать</button>
   <span class="mono dim" id="state">Нажмите «Начать», затем держите шарик между красными метками.</span>
 </form>
+{{ task.physics|json_script:"move-physics" }}
 {% endif %}
 {% endblock %}
 {% block script %}
 {% if not auto %}
 <script>
+{% include "ls/_move_physics.js" %}
 (function () {
-  // Параметры физики: положение шарика x от -1 до 1, метки на ±0.25.
-  var NEED = {{ task.seconds }};
-  var LIMIT = 0.25, HALF = 270;
-  var GRAVITY = 1.2, DRIFT_STEP = 3, DRIFT_MAX = 0.3, TILT_RATE = 2.2, TILT_RETURN = 0.8, DAMP = 1.0;
-
+  // Физика из задачи; запись нажатий по шагам уходит на сервер, он прогоняет её сам.
+  var p = JSON.parse(document.getElementById('move-physics').textContent);
+  var DT = 1 / p.fps, HALF_PX = 270;
   var ball = document.getElementById('ball');
   var tiltG = document.getElementById('tilt');
+  var plank = document.getElementById('plank');
+  var markL = document.getElementById('mark-l'), markR = document.getElementById('mark-r');
+  var warnL = document.getElementById('warn-l'), warnR = document.getElementById('warn-r');
   var timerEl = document.getElementById('timer');
   var stateEl = document.getElementById('state');
   var startBtn = document.getElementById('start');
   var form = document.getElementById('answer-form');
-  var running = false, input = 0;
-  var x, v, drift, angle, t0, last;
+  var running = false, input = 0, sim = new LsMoveSim(p), record = [], acc = 0, last = 0;
 
   function keyDir(e) { return e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0; }
   document.addEventListener('keydown', function (e) {
     var d = keyDir(e);
     if (d) { input = d; e.preventDefault(); }
   });
-  document.addEventListener('keyup', function (e) { if (keyDir(e)) input = 0; });
-  [['left', -1], ['right', 1]].forEach(function (p) {
-    var b = document.getElementById(p[0]);
-    b.addEventListener('pointerdown', function (e) { input = p[1]; e.preventDefault(); });
-    ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (n) {
-      b.addEventListener(n, function () { if (input === p[1]) input = 0; });
+  document.addEventListener('keyup', function (e) { if (keyDir(e) && keyDir(e) === input) input = 0; });
+  document.addEventListener('contextmenu', function (e) { if (e.target.closest && e.target.closest('.pad, .rig')) e.preventDefault(); });
+  [['left', -1], ['right', 1]].forEach(function (pair) {
+    var b = document.getElementById(pair[0]);
+    b.addEventListener('pointerdown', function (e) { input = pair[1]; b.classList.add('held'); e.preventDefault(); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (name) {
+      b.addEventListener(name, function () { b.classList.remove('held'); if (input === pair[1]) input = 0; });
     });
   });
 
+  function encode(list) {
+    var out = '', prev = null, count = 0;
+    list.forEach(function (u) {
+      var ch = u < 0 ? 'L' : u > 0 ? 'R' : 'N';
+      if (ch === prev) { count += 1; return; }
+      if (prev) out += prev + count;
+      prev = ch; count = 1;
+    });
+    if (prev) out += prev + count;
+    return out;
+  }
+  function warnAt(n) {
+    var dir = 0;
+    if (!p.warn) return 0;
+    p.pushes.forEach(function (push) { if (push[0] > n && push[0] <= n + p.warn) dir = push[1]; });
+    return dir;
+  }
   function draw() {
-    var deg = angle * 12;
-    tiltG.setAttribute('transform', 'rotate(' + deg + ' 300 130)');
-    ball.setAttribute('cx', 300 + x * HALF);
+    var w = lsMoveWindow(p, Math.max(0, sim.n - 1));
+    markL.setAttribute('x1', 300 + (w[0] - w[1]) * HALF_PX); markL.setAttribute('x2', 300 + (w[0] - w[1]) * HALF_PX);
+    markR.setAttribute('x1', 300 + (w[0] + w[1]) * HALF_PX); markR.setAttribute('x2', 300 + (w[0] + w[1]) * HALF_PX);
+    tiltG.setAttribute('transform', 'rotate(' + (sim.angle * 12) + ' 300 130)');
+    ball.setAttribute('cx', 300 + sim.x * HALF_PX);
+    var g = p.glitch;
+    plank.classList.toggle('glitch', !!(running && g && sim.n >= g.start && sim.n < g.start + g.steps));
+    var dir = running ? warnAt(sim.n) : 0;
+    warnL.classList.toggle('on', dir < 0);
+    warnR.classList.toggle('on', dir > 0);
+    timerEl.textContent = Math.max(0, (p.steps - sim.n) * DT).toFixed(1);
   }
   function finish(ok) {
     running = false;
-    document.getElementById('result').value = ok ? 'ok' : 'fail';
-    document.getElementById('elapsed').value = ((performance.now() - t0) / 1000).toFixed(2);
-    stateEl.textContent = ok ? 'Готово, отправляю…' : 'Шарик упал.';
+    document.getElementById('record').value = encode(record);
+    stateEl.textContent = ok ? 'Готово, отправляю…' : 'Шарик вышел из окна.';
+    draw();
     setTimeout(function () { form.submit(); }, ok ? 300 : 900);
   }
   function frame(now) {
     if (!running) return;
-    var dt = Math.min(0.05, (now - last) / 1000);
+    acc += Math.min(0.25, (now - last) / 1000);
     last = now;
-    drift += (Math.random() - 0.5) * DRIFT_STEP * dt;
-    drift = Math.max(-DRIFT_MAX, Math.min(DRIFT_MAX, drift));
-    if (input) angle += input * TILT_RATE * dt; else angle -= angle * TILT_RETURN * dt;
-    angle = Math.max(-1, Math.min(1, angle));
-    v += (angle * GRAVITY + drift) * dt;
-    v -= v * DAMP * dt;
-    x += v * dt;
+    while (running && acc >= DT) {
+      acc -= DT;
+      record.push(input);
+      if (!sim.step(input)) { finish(false); return; }
+      if (sim.n >= p.steps) { finish(true); return; }
+    }
     draw();
-    var elapsed = (now - t0) / 1000;
-    timerEl.textContent = Math.max(0, NEED - elapsed).toFixed(1);
-    if (Math.abs(x) > LIMIT) { finish(false); return; }
-    if (elapsed >= NEED) { finish(true); return; }
     requestAnimationFrame(frame);
   }
   startBtn.addEventListener('click', function () {
     startBtn.disabled = true;
     stateEl.textContent = 'Держите.';
-    x = 0; v = 0; drift = (Math.random() - 0.5) * 0.4; angle = 0;
-    t0 = last = performance.now();
+    last = performance.now();
     running = true;
     requestAnimationFrame(frame);
   });
-  x = 0; angle = 0; draw();
+  draw();
 })();
 </script>
 {% endif %}

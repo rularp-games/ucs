@@ -18,9 +18,18 @@ DEFAULT_CONTENT = 'game'
 
 SYMBOL_KEYS = ('circle', 'square', 'triangle', 'cross', 'star')
 MEMORY_TYPES = ('name', 'memory', 'link', 'body', 'death', 'arrival')
+FREE_MEMORY_TYPES = ('name', 'memory')        # пакеты № 1 и № 2: бесплатно, без выбора
+MEMORY_THEMES = ('link', 'body', 'death', 'arrival')   # темы, которые игрок выбирает за карту
+MEMORY_THEME_TITLES = {
+    'link': 'Связь',
+    'body': 'Тело',
+    'death': 'Смерть',
+    'arrival': 'Попадание',
+}
+DOSSIER_PART_TITLES = {'life': 'Жизнь', 'death': 'Смерть', 'arrival': 'Попадание'}
 DOSSIER_PARTS = ('life', 'death', 'arrival')
 PROGRAM_SIZE = 8
-PARAM_KEYS = ('nav', 'move', 'parts', 'fire')
+FLIGHT_SIZE = 5                                 # пять равноправных игроков в звене
 ARCHIVE_KINDS = ('История', 'Диалог', 'Серия А', 'Дело')
 CODE_LENGTH = 4
 GENDERS = ('m', 'f')
@@ -56,7 +65,6 @@ class MemoryPack:
     type: str
     text: str
     not_before: int | None = None
-    requires_param_open: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,18 +72,35 @@ class Character:
     id: str
     callsign: str
     symbol: str
-    is_imp: bool
     memory: tuple[MemoryPack, ...]
     dossier: dict[str, str]
     gender: str                             # исходный пол роли, 'm' или 'f'
     names: dict[str, str]                   # полное имя по полу: {'m': ..., 'f': ...}
 
+    def memory_pack(self, pack_type: str) -> MemoryPack:
+        """Пакет памяти по типу: name, memory, link, body, death или arrival."""
+        for pack in self.memory:
+            if pack.type == pack_type:
+                return pack
+        raise KeyError(pack_type)
+
 
 @dataclass(frozen=True)
 class ProgramPack:
+    """Пакет программы. Фоновая сводка (`free`) появляется сама, остальные раскрывает вопрос."""
     id: str
     topic: str
     text: str
+    not_before: int
+    free: bool = False
+
+
+@dataclass(frozen=True)
+class ProgramQuestion:
+    """Вопрос о программе: за одну карту раскрывает один или несколько пакетов."""
+    id: str
+    title: str
+    packs: tuple[str, ...]
     not_before: int
 
 
@@ -106,8 +131,26 @@ class Content:
     symbols: dict[str, str]
     dossier_locks: dict[str, int]
     program: tuple[ProgramPack, ...]
+    program_questions: tuple[ProgramQuestion, ...]
     flights: tuple[FlightDef, ...]
     archive: tuple[ArchiveEntry, ...]
+
+    @property
+    def free_program(self) -> tuple[ProgramPack, ...]:
+        """Фоновые сводки, которые появляются без карты."""
+        return tuple(p for p in self.program if p.free)
+
+    def program_pack(self, pack_id: str) -> ProgramPack:
+        for pack in self.program:
+            if pack.id == pack_id:
+                return pack
+        raise KeyError(pack_id)
+
+    def program_question(self, question_id: str) -> ProgramQuestion | None:
+        for question in self.program_questions:
+            if question.id == question_id:
+                return question
+        return None
 
     @property
     def characters(self) -> tuple[Character, ...]:
@@ -153,17 +196,21 @@ def _parse_memory(char_id: str, raw: list) -> tuple[MemoryPack, ...]:
             type=str(item['type']),
             text=str(item['text']).strip(),
             not_before=item.get('not_before'),
-            requires_param_open=item.get('requires_param_open'),
         )
         _require(pack.type in MEMORY_TYPES, f'{char_id}/{pack.id}: неизвестный тип «{pack.type}»')
         _require(pack.id not in seen, f'{char_id}: повтор пакета {pack.id}')
         _require(pack.not_before is None or isinstance(pack.not_before, int),
                  f'{char_id}/{pack.id}: not_before должен быть числом минут или null')
-        _require(pack.requires_param_open in (None, *PARAM_KEYS),
-                 f'{char_id}/{pack.id}: неизвестный параметр в requires_param_open')
         _require(bool(pack.text), f'{char_id}/{pack.id}: пустой текст')
         seen.add(pack.id)
         packs.append(pack)
+    _require([p.type for p in packs] == list(MEMORY_TYPES),
+             f'{char_id}: пакеты памяти должны идти в порядке {", ".join(MEMORY_TYPES)}')
+    for pack in packs:
+        if pack.type in MEMORY_THEMES:
+            _require(pack.not_before is not None, f'{char_id}/{pack.id}: у темы «{pack.type}» нужен замок not_before')
+        else:
+            _require(pack.not_before is None, f'{char_id}/{pack.id}: бесплатный пакет не имеет замка')
     return tuple(packs)
 
 
@@ -182,7 +229,7 @@ def _parse_character(item: dict, symbols: dict[str, str]) -> Character:
     names = {g: str(raw_names.get(g, '')).strip() for g in GENDERS}
     _require(all(names.values()), f'{char_id}: names должны содержать имена m и f')
     return Character(id=char_id, callsign=str(item['callsign']), symbol=symbol,
-                     is_imp=bool(item.get('is_imp', False)), memory=memory, dossier=dossier,
+                     memory=memory, dossier=dossier,
                      gender=gender, names=names)
 
 
@@ -206,10 +253,33 @@ def _parse_flights(raw: list, symbols: dict[str, str]) -> tuple[FlightDef, ...]:
             flight_symbols.add(character.symbol)
             characters.append(character)
         _require(bool(characters), f'{name}: в звене нет персонажей')
-        _require(sum(c.is_imp for c in characters) == 1, f'{name}: в звене должен быть ровно один ИМП')
+        _require(len(characters) == FLIGHT_SIZE, f'{name}: в звене должно быть {FLIGHT_SIZE} персонажей')
         flights.append(FlightDef(name=name, characters=tuple(characters)))
     _require(bool(flights), 'нет ни одного звена')
     return tuple(flights)
+
+
+def _parse_program_questions(raw: list, program: tuple[ProgramPack, ...]) -> tuple[ProgramQuestion, ...]:
+    """Вопросы программы: каждый платный пакет принадлежит ровно одному вопросу, фоновые — ни одному."""
+    by_id = {p.id: p for p in program}
+    questions = []
+    used: list[str] = []
+    ids: set[str] = set()
+    for item in raw:
+        question = ProgramQuestion(id=str(item['id']), title=str(item.get('title', '')).strip(),
+                                   packs=tuple(str(x) for x in item.get('packs') or ()),
+                                   not_before=int(item['not_before']))
+        _require(question.id not in ids, f'программа: повтор вопроса {question.id}')
+        ids.add(question.id)
+        _require(bool(question.title) and bool(question.packs), f'вопрос {question.id}: нужны заголовок и пакеты')
+        for pack_id in question.packs:
+            _require(pack_id in by_id, f'вопрос {question.id}: нет пакета {pack_id}')
+            _require(not by_id[pack_id].free, f'вопрос {question.id}: пакет {pack_id} фоновый')
+        used.extend(question.packs)
+        questions.append(question)
+    paid = sorted(p.id for p in program if not p.free)
+    _require(sorted(used) == paid, 'каждый платный пакет программы должен принадлежать ровно одному вопросу')
+    return tuple(questions)
 
 
 def _parse_archive(raw: list) -> tuple[ArchiveEntry, ...]:
@@ -265,12 +335,12 @@ def parse_content(data: dict, name: str = DEFAULT_CONTENT) -> Content:
 
     program = tuple(
         ProgramPack(id=str(p['id']), topic=str(p.get('topic', '')), text=str(p['text']).strip(),
-                    not_before=int(p['not_before']))
+                    not_before=int(p['not_before']), free=bool(p.get('free', False)))
         for p in data.get('program') or []
     )
     _require(len(program) == PROGRAM_SIZE, f'в программе должно быть {PROGRAM_SIZE} пакетов, а не {len(program)}')
-    minutes = [p.not_before for p in program]
-    _require(minutes == sorted(minutes), 'not_before пакетов программы должны не убывать')
+    _require(len({p.id for p in program}) == len(program), 'повтор id пакета программы')
+    questions = _parse_program_questions(data.get('program_questions') or [], program)
 
     flights = _parse_flights(data.get('flights') or [], symbols)
     archive = _parse_archive(data.get('archive') or [])
@@ -282,6 +352,7 @@ def parse_content(data: dict, name: str = DEFAULT_CONTENT) -> Content:
         symbols=symbols,
         dossier_locks=locks,
         program=program,
+        program_questions=questions,
         flights=flights,
         archive=archive,
     )

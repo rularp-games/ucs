@@ -3,9 +3,18 @@
 {% block content %}
 <h2>Что я знаю</h2>
 {% for s in sections %}
-<h2>{{ s.title }}</h2>
-{% for item in s.items %}
-<div class="panel protocol"><span class="dim">{{ forloop.counter }}.</span> {{ item.payload }}</div>
+<h2 id="{{ s.key }}">{{ s.title }}</h2>
+{% for g in s.groups %}
+{% if g.title %}<h3 class="group">{{ g.title }}</h3>{% endif %}
+{% for item in g.items %}
+<div class="panel protocol">
+  {% if item.title %}<strong>{{ item.title }}</strong>
+  <div style="margin-top:8px">{{ item.text|linebreaks }}</div>
+  {% else %}{{ item.text|linebreaks }}{% endif %}
+</div>
+{% empty %}
+<p class="dim">Пока ничего.</p>
+{% endfor %}
 {% empty %}
 <p class="dim">Пока ничего.</p>
 {% endfor %}
@@ -23,4 +32,7 @@
   {% elif player.radio_level == 1 %}Уровень 1. Эфир открыт.
   {% else %}Уровень 2. Рация работает и на посту.{% endif %}
 </div>
+{% endblock %}
+{% block style %}
+  h3.group { font: 600 15px ui-monospace, Menlo, Consolas, monospace; margin: 16px 0 8px; color: var(--accent); }
 {% endblock %}

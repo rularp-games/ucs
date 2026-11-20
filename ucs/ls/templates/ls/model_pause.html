@@ -1,0 +1,28 @@
+{% extends "ls/base.html" %}
+{% block title %}{{ param_title }} · {{ model_title }}{% endblock %}
+{% block content %}
+<div class="row">
+  <h2 class="grow" style="margin:0">{{ param_title }} · {{ model_title }}</h2>
+  <span class="mono dim">{{ value }}%</span>
+  <a class="btn" href="{% url 'ls:post' %}">К посту</a>
+</div>
+<div class="bar {{ mode }}" style="margin:10px 0 18px"><i style="width:{{ value }}%"></i></div>
+<div class="panel center mono">
+  Перекалибровка после провала.
+  <div style="font-size:32px;margin-top:8px"><span id="pause-left">{{ pause }}</span> с</div>
+</div>
+{% endblock %}
+{% block script %}
+<script>
+(function () {
+  // Задача выдаётся только после паузы; по её окончании страница перезагружается сама.
+  var left = {{ pause }};
+  var out = document.getElementById('pause-left');
+  var timer = setInterval(function () {
+    left -= 1;
+    out.textContent = Math.max(0, left);
+    if (left <= 0) { clearInterval(timer); location.reload(); }
+  }, 1000);
+})();
+</script>
+{% endblock %}

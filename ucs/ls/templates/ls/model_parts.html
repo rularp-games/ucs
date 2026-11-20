@@ -1,7 +1,16 @@
 {% extends "ls/model_base.html" %}
-{% block instruction %}Выполните чек-лист. Остальные положения не менять.{% endblock %}
+{% block instruction %}Выполните чек-лист. Остальные положения не менять. Пункт с названием функции раскрывается по справочнику функций.{% if task.marks %} Если тумблера из пункта на панели нет, отметьте пункт «Нет на панели».{% endif %}{% endblock %}
 {% block style %}
-  .switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .checkpanel { position: sticky; top: 0; z-index: 5; box-shadow: 0 6px 12px rgba(0,0,0,.45); }
+  .checklist { list-style: none; margin: 0; padding: 0; counter-reset: item; }
+  .checklist li { counter-increment: item; display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 17px; }
+  .checklist li::before { content: counter(item) '.'; font: 14px ui-monospace, monospace; color: var(--dim); min-width: 1.6em; }
+  .checklist li .text { flex: 1; min-width: 0; }
+  .checklist li.missing .text { text-decoration: line-through; color: var(--dim); }
+  .mark { white-space: nowrap; font-size: 12px; padding: 4px 8px; }
+  .mark[aria-pressed="true"] { border-color: #b39a58; color: #e5cf8f; background: #2a2412; }
+  .funcs { font-size: 14px; margin: 0; padding-left: 18px; }
+  .switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 10px; }
   .sw { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; user-select: none; }
   .sw input { position: absolute; opacity: 0; pointer-events: none; }
   .sw .track { width: 46px; height: 24px; border-radius: 12px; background: #0c121b; border: 1px solid var(--line); position: relative; flex: none; transition: background .12s; }
@@ -12,20 +21,42 @@
   .sw .lbl { display: flex; flex-direction: column; min-width: 0; }
   .sw .name { white-space: nowrap; }
   .sw .state { font: 11px ui-monospace, monospace; color: var(--dim); }
-  .checklist li { padding: 3px 0; font-size: 17px; }
+  .sw.flipped { animation: flip 1.2s ease-out; }
+  @keyframes flip { 0% { border-color: #e5cf8f; background: #2a2412; } 100% { border-color: var(--line); background: var(--panel); } }
+  .sw { -webkit-touch-callout: none; min-height: 56px; }
+  @media (max-width: 600px) {
+    /* две колонки: чек-лист закреплён сверху, тумблеры помещаются под ним */
+    .checkpanel { padding: 8px 10px; }
+    .switches { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+    .sw { padding: 8px 10px; gap: 8px; }
+    .sw .track { width: 46px; height: 26px; border-radius: 13px; }
+    .sw .track::after { width: 20px; height: 20px; }
+    .sw input:checked + .track::after { left: 22px; }
+    .sw .name { white-space: normal; font-size: 15px; line-height: 1.2; }
+    .sw .state { font-size: 12px; }
+    .checklist li { font-size: 15px; gap: 6px; }
+    .mark { min-height: 44px; padding: 4px 8px; font-size: 12px; }
+    #answer-form button { flex: 1 1 100%; }
+  }
 {% endblock %}
 {% block task %}
 {% if not auto %}
-<div class="panel">
+<div class="panel checkpanel">
   <div class="mono dim" style="margin-bottom:6px">Чек-лист</div>
-  <ol class="checklist" style="margin:0;padding-left:24px">
-    {% for line in checklist %}<li>{{ line }}</li>{% endfor %}
+  <ol class="checklist" id="checklist">
+    {% for item in checklist %}<li data-n="{{ item.index }}"><span class="text">{{ item.label }}</span>{% if task.marks %}<button type="button" class="mark" aria-pressed="false">Нет на панели</button>{% endif %}</li>{% endfor %}
   </ol>
 </div>
+{% if task.reference %}
+<div class="panel">
+  <div class="mono dim" style="margin-bottom:6px">Справочник функций</div>
+  <ul class="funcs">{% for line in task.reference %}<li>{{ line }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
 <div class="switches" id="switches">
   {% for s in switches %}
   <label class="sw">
-    <input type="checkbox" data-i="{{ s.index }}"{% if s.on %} checked{% endif %}>
+    <input type="checkbox" data-i="{{ s.index }}" data-on="{{ s.on_word }}" data-off="{{ s.off_word }}"{% if s.on %} checked{% endif %}>
     <span class="track"></span>
     <span class="lbl">
       <span class="name">{{ s.name }}</span>
@@ -37,6 +68,7 @@
 <form method="post" id="answer-form" class="row" style="margin-top:14px">
   {% csrf_token %}
   <input type="hidden" name="answer" id="answer" value="">
+  <input type="hidden" name="missing" id="missing" value="">
   <button class="primary" id="confirm">Подтвердить</button>
 </form>
 {% endif %}
@@ -46,12 +78,52 @@
 <script>
 (function () {
   var boxes = Array.prototype.slice.call(document.querySelectorAll('#switches input'));
+  var marks = Array.prototype.slice.call(document.querySelectorAll('#checklist .mark'));
   function sync() {
     boxes.forEach(function (b) {
-      b.parentNode.querySelector('.state').textContent = b.checked ? 'ВКЛ' : 'ВЫКЛ';
+      b.parentNode.querySelector('.state').textContent = b.checked ? b.dataset.on : b.dataset.off;
     });
     document.getElementById('answer').value = boxes.map(function (b) { return b.checked ? '1' : '0'; }).join('');
+    document.getElementById('missing').value = marks.filter(function (m) {
+      return m.getAttribute('aria-pressed') === 'true';
+    }).map(function (m) { return m.parentNode.dataset.n; }).join(',');
   }
+  marks.forEach(function (m) {
+    m.addEventListener('click', function () {
+      var on = m.getAttribute('aria-pressed') !== 'true';
+      m.setAttribute('aria-pressed', on ? 'true' : 'false');
+      m.parentNode.classList.toggle('missing', on);
+      sync();
+    });
+  });
+  {% if task.flip %}
+  // «Готовность»: через несколько секунд после первого касания один тумблер вне чек-листа
+  // сам меняет положение. Его надо вернуть: остальные положения не менять.
+  var flip = {{ task.flip.switch }}, delay = {{ task.flip.delay }} * 1000, armed = false;
+  function click() {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.frequency.value = 1800; gain.gain.value = 0.15;
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + 0.03);
+    } catch (e) { /* без звука */ }
+  }
+  function arm() {
+    if (armed) return;
+    armed = true;
+    setTimeout(function () {
+      var box = boxes[flip];
+      box.checked = !box.checked;
+      var card = box.closest('.sw');
+      card.classList.remove('flipped'); void card.offsetWidth; card.classList.add('flipped');
+      click();
+      sync();
+    }, delay);
+  }
+  boxes.forEach(function (b) { b.addEventListener('change', arm); });
+  marks.forEach(function (m) { m.addEventListener('click', arm); });
+  {% endif %}
   boxes.forEach(function (b) { b.addEventListener('change', sync); });
   sync();
 })();

@@ -36,6 +36,11 @@
   {% endfor %}
 </div>
 
+{% if summaries %}
+<h2>Сводки</h2>
+{% for s in summaries %}<div class="panel protocol">{{ s.text }}</div>{% endfor %}
+{% endif %}
+
 <h2>Ресурсы</h2>
 <div class="panel">
   <div class="row">
@@ -47,6 +52,7 @@
     <a class="btn" href="{% url 'ls:codes' %}">Коды</a>
     <a class="btn" href="{% url 'ls:cards' %}">Карты</a>
     <a class="btn" href="{% url 'ls:known' %}">Что я знаю</a>
+    <a class="btn" href="{% url 'ls:known' %}#self">Ваши первые воспоминания</a>
     {% if has_radio %}<a class="btn" href="{% url 'ls:radio' %}">Эфир</a>{% endif %}
   </p>
 </div>

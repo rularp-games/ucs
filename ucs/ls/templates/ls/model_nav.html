@@ -1,29 +1,71 @@
 {% extends "ls/model_base.html" %}
-{% block instruction %}Нажмите клетки маяков по порядку, затем точку выхода. Буква — столбец, цифра — строка.{% endblock %}
+{% block instruction %}Нажмите клетки маяков по порядку, затем точку выхода. Буква — столбец, цифра — строка. Смещение «2 вправо, 3 вниз» считается в клетках от названного маяка.{% if nav_cards %} Карточка созвездия показывает звезду-маяк (в кольце) и трёх её ближайших соседей в том же масштабе, что и поле: найдите этот рисунок среди звёзд и нажмите клетку маяка.{% endif %}{% endblock %}
 {% block style %}
-  .map { width: 100%; max-width: 720px; display: block; background: #070b11; border: 1px solid var(--line); border-radius: 4px; touch-action: manipulation; }
+  .navwrap { max-width: 640px; }
+  .map { width: 100%; display: block; background: #070b11; border: 1px solid var(--line); border-radius: 4px; touch-action: manipulation; height: auto; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .map .cell { fill: transparent; stroke: var(--line); stroke-width: 1; cursor: pointer; }
   .map .cell:hover { fill: rgba(108,180,230,.12); }
   .map .cell.picked { fill: rgba(108,180,230,.3); stroke: var(--accent); }
-  .map .star { fill: #8fa3bd; opacity: .7; pointer-events: none; }
-  .map .lbl { fill: var(--dim); font: 11px ui-monospace, monospace; pointer-events: none; }
-  .map .num { fill: #fff; font: 600 16px ui-monospace, monospace; pointer-events: none; text-anchor: middle; }
+  .map .star { fill: #8fa3bd; opacity: .75; pointer-events: none; }
+  .map .beacon { fill: none; stroke: #e5cf8f; stroke-width: 2; pointer-events: none; }
+  .map .lbl { fill: var(--dim); font: 19px ui-monospace, monospace; pointer-events: none; }
+  .map .num { fill: #fff; font: 600 22px ui-monospace, monospace; pointer-events: none; text-anchor: middle; }
+  .map .tgt { fill: none; stroke: #e0a3a1; stroke-width: 2.5; pointer-events: none; }
+  .map .tgt-arrow { stroke: #e0a3a1; stroke-width: 2.5; stroke-dasharray: 6 5; pointer-events: none; }
+  .map .tgt-lbl { fill: #e0a3a1; font: 15px ui-monospace, monospace; pointer-events: none; }
+  .cards { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; margin-bottom: 12px; }
+  .ncard { background: #070b11; border: 1px solid var(--accent); border-radius: 4px; position: relative; }
+  .ncard svg { display: block; width: 100%; height: auto; }
+  .ncard .star { fill: #8fa3bd; }
+  .ncard .beacon { fill: none; stroke: #e5cf8f; stroke-width: 2; }
+  .ncard .no { position: absolute; left: 4px; top: 0; font: 600 12px ui-monospace, monospace; color: var(--accent); }
   .task-line { font-size: 18px; }
   .task-line b { color: var(--accent); font-family: ui-monospace, monospace; }
+  @media (max-width: 600px) {
+    .task-line { font-size: 16px; }
+    #answer-form .row, #answer-form { gap: 10px; }
+    #answer-form button { flex: 1 1 40%; }
+    #progress { flex: 1 1 100%; text-align: center; }
+  }
 {% endblock %}
 {% block task %}
 {% if not auto %}
 <div class="panel task-line">
-  {% if not short %}Маяки: <b>{{ beacons_text }}</b><br>{% endif %}
-  Точка выхода: <b>{{ task.exit }}</b>
+  {% for b in beacon_lines %}Маяк {{ b.number }}: <b>{{ b.text }}</b><br>{% endfor %}
+  {% if nav_cards and not short %}Маяки {% for c in nav_cards %}{{ c.number }}{% if not forloop.last %} и {% endif %}{% endfor %} — на карточках созвездий.<br>{% endif %}
+  {% if nav_cards and short %}Маяк — на карточке созвездия.<br>{% endif %}
+  {{ task.exit_text }}
 </div>
-<svg class="map" id="map" viewBox="-20 -20 {{ width|add:30 }} {{ height|add:30 }}" role="img" aria-label="Карта 12 на 8">
-  {% for s in stars %}<circle class="star" cx="{{ s.x }}" cy="{{ s.y }}" r="1.6"/>{% endfor %}
-  {% for c in cells %}<rect class="cell" data-cell="{{ c.label }}" x="{{ c.x }}" y="{{ c.y }}" width="{{ cell }}" height="{{ cell }}"/>{% endfor %}
-  {% for l in col_labels %}<text class="lbl" x="{{ l.x }}" y="-6" text-anchor="middle">{{ l.text }}</text>{% endfor %}
-  {% for l in row_labels %}<text class="lbl" x="-8" y="{{ l.y }}" text-anchor="end">{{ l.text }}</text>{% endfor %}
-  <g id="marks"></g>
-</svg>
+<div class="navwrap">
+  {% if nav_cards %}
+  <div class="cards">
+    {% for c in nav_cards %}
+    <div class="ncard" style="width:{{ c.width_pct }}%">
+      <span class="no">{{ c.number }}</span>
+      <svg viewBox="-{{ c.half }} -{{ c.half }} {{ c.size }} {{ c.size }}" role="img" aria-label="Карточка созвездия {{ c.number }}">
+        <circle class="beacon" cx="0" cy="0" r="7"/>
+        <circle class="star" cx="0" cy="0" r="2.8"/>
+        {% for p in c.points %}<circle class="star" cx="{{ p.x }}" cy="{{ p.y }}" r="2.8"/>{% endfor %}
+      </svg>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <svg class="map" id="map" viewBox="-{{ margin }} -{{ margin }} {{ view_w }} {{ view_h }}" style="aspect-ratio: {{ view_w }} / {{ view_h }}" role="img" aria-label="Карта 8 на 11">
+    {% for s in stars %}<circle class="star" cx="{{ s.x }}" cy="{{ s.y }}" r="2.8"/>{% endfor %}
+    {% for s in highlight %}<circle class="beacon" cx="{{ s.x }}" cy="{{ s.y }}" r="7"/>{% endfor %}
+    {% if target_mark %}
+    <line class="tgt-arrow" x1="{{ target_mark.x }}" y1="{{ target_mark.y }}" x2="{{ target_mark.x2 }}" y2="{{ target_mark.y2 }}"/>
+    <circle class="tgt" cx="{{ target_mark.x2 }}" cy="{{ target_mark.y2 }}" r="4"/>
+    <rect class="tgt" x="{{ target_mark.rx }}" y="{{ target_mark.ry }}" width="18" height="18" transform="rotate(45 {{ target_mark.x }} {{ target_mark.y }})"/>
+    <text class="tgt-lbl" x="{{ target_mark.lx }}" y="{{ target_mark.ly }}">учебная цель</text>
+    {% endif %}
+    {% for c in cells %}<rect class="cell" data-cell="{{ c.label }}" x="{{ c.x }}" y="{{ c.y }}" width="{{ cell }}" height="{{ cell }}"/>{% endfor %}
+    {% for l in col_labels %}<text class="lbl" x="{{ l.x }}" y="-10" text-anchor="middle">{{ l.text }}</text>{% endfor %}
+    {% for l in row_labels %}<text class="lbl" x="-8" y="{{ l.y }}" text-anchor="end">{{ l.text }}</text>{% endfor %}
+    <g id="marks"></g>
+  </svg>
+</div>
 <form method="post" id="answer-form" class="row" style="margin-top:14px">
   {% csrf_token %}
   <input type="hidden" name="answer" id="answer" value="">
@@ -56,7 +98,7 @@
         var t = document.createElementNS(NS, 'text');
         t.setAttribute('class', 'num');
         t.setAttribute('x', +r.getAttribute('x') + cell / 2);
-        t.setAttribute('y', +r.getAttribute('y') + cell / 2 + 6);
+        t.setAttribute('y', +r.getAttribute('y') + cell / 2 + 8);
         t.textContent = i + 1;
         marks.appendChild(t);
       }

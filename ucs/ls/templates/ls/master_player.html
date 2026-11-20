@@ -4,22 +4,23 @@
 <p><a href="{% url 'ls:master_game' game.pk %}">&larr; {{ game.title }}</a></p>
 <h2>{{ player.callsign }} <span class="dim">· {{ character_name }} ({{ player.get_gender_display }}) · {{ player.flight.name }}</span></h2>
 <div class="panel">
-  Навигация {{ player.sync_nav }}% · Движение {{ player.sync_move }}% · Части {{ player.sync_parts }}% · Огонь {{ player.sync_fire }}%
+  Навигация {{ player.sync_nav }}% · Движение {{ player.sync_move }}% · Части {{ player.sync_parts }}% · Восприятие {{ player.sync_sense }}% · Огонь {{ player.sync_fire }}%
   · Карты {{ player.cards }} · Рация {{ player.radio_level }}
 </div>
 <h2>Попытки</h2>
 <div class="panel table-wrap"><table>
-  <tr><th>Время</th><th>Параметр</th><th>Sync до</th><th>Итог</th></tr>
-  {% for a in attempts %}
-  <tr><td class="mono">{{ a.created_at|date:"H:i:s" }}</td><td>{{ a.param }}</td><td>{{ a.level }}</td>
-    <td>{% if a.deviation %}отказ{% elif a.success %}выполнено{% else %}провал{% endif %}</td></tr>
-  {% empty %}<tr><td colspan="4" class="dim">Попыток нет.</td></tr>{% endfor %}
+  <tr><th>Время</th><th>Параметр</th><th>Этап</th><th>Sync до</th><th>Итог</th><th>Задача</th></tr>
+  {% for row in attempts %}{% with a=row.a %}
+  <tr><td class="mono">{{ a.created_at|date:"H:i:s" }}</td><td>{{ a.get_param_display }}</td><td>{{ a.stage }}</td><td>{{ a.level }}</td>
+    <td>{% if a.deviation %}отказ{% if a.card %}, карта{% else %}, без карты{% endif %}{% elif a.success %}выполнено{% else %}провал{% endif %}</td>
+    <td>{{ row.text }}</td></tr>
+  {% endwith %}{% empty %}<tr><td colspan="6" class="dim">Попыток нет.</td></tr>{% endfor %}
 </table></div>
 <h2>Покупки</h2>
 <div class="panel table-wrap"><table>
   <tr><th>Время</th><th>Вид</th><th>Выдано</th></tr>
   {% for p in purchases %}
-  <tr><td class="mono">{{ p.created_at|date:"H:i:s" }}</td><td>{{ p.get_kind_display }}</td><td>{{ p.payload }}</td></tr>
+  <tr><td class="mono">{{ p.created_at|date:"H:i:s" }}</td><td>{{ p.get_kind_display }}{% if p.key %} <span class="dim mono">{{ p.key }}</span>{% endif %}</td><td>{{ p.payload }}</td></tr>
   {% empty %}<tr><td colspan="3" class="dim">Покупок нет.</td></tr>{% endfor %}
 </table></div>
 <h2>Выданные жетоны</h2>

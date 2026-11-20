@@ -15,7 +15,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import engine
-from .loader import get_content, render_gender
+from .loader import (DOSSIER_PART_TITLES, FREE_MEMORY_TYPES, MEMORY_THEME_TITLES, MEMORY_THEMES,
+                     get_content, render_gender)
 from .models import (TOKEN_TTL, ArchiveOpen, DarkEntry, Flight, Game, Player, Purchase,
                      TaskAttempt, Token)
 
@@ -59,7 +60,6 @@ def create_game(title: str, code: str, content_name: str, flights_count: int) ->
                 flight=flight,
                 callsign=character.callsign,
                 symbol=character.symbol,
-                is_imp=character.is_imp,
                 character_id=character.id,
                 gender=character.gender,
             )
@@ -79,31 +79,88 @@ def game_genders(game: Game) -> dict[str, str]:
 
 # --- Синхронизация ----------------------------------------------------------
 
-def record_attempt(player: Player, param: str, success: bool) -> Player:
-    """Записать попытку; успех даёт +25, провал ничего не меняет."""
-    level = player.get_sync(param)
-    TaskAttempt.objects.create(player=player, param=param, level=level, success=success)
-    if success:
-        player.set_sync(param, engine.after_success(level))
-        player.save(update_fields=[f'sync_{param}'])
-    return player
+def stage_of(game: Game, now=None) -> int:
+    """Этап игры по игровому времени (до старта — первый)."""
+    return engine.stage(game.game_minutes(now))
 
 
-def apply_deviation(player: Player, param: str) -> bool:
-    """Намеренное отклонение: −25 по параметру и +1 карта.
+def record_attempt(player: Player, param: str, success: bool, stage: int = 1,
+                   summary: dict | None = None, now=None) -> bool:
+    """Записать попытку; успех даёт +25 в пределах потолка этапа, провал ничего не меняет.
 
-    Если снижать уже нечего (sync равен нулю), карта не выдаётся: иначе отказ
-    на нулевом параметре был бы бесконечным источником карт.
-    Возвращает True, если карта выдана.
+    Возвращает True, если успех упёрся в потолок этапа: «Предел калибровки на этом этапе».
     """
     level = player.get_sync(param)
-    TaskAttempt.objects.create(player=player, param=param, level=level, success=False, deviation=True)
+    TaskAttempt.objects.create(player=player, param=param, level=level, success=success, stage=stage,
+                               summary=summary or {}, created_at=now or timezone.now())
+    if not success:
+        return False
+    new = engine.after_success(level, engine.stage_cap(stage))
+    if new == level:
+        return level < engine.SYNC_MAX
+    player.set_sync(param, new)
+    player.save(update_fields=[f'sync_{param}'])
+    return False
+
+
+def pause_seconds(player: Player, param: str, now=None) -> int:
+    """Пауза перекалибровки: 30 с после провала по этому параметру, иначе 0.
+
+    Считается по журналу попыток, поэтому её не обойти ни другим браузером, ни повторным входом.
+    """
+    now = now or timezone.now()
+    last = player.attempts.filter(param=param, deviation=False).first()
+    if last is None or last.success:
+        return 0
+    return engine.pause_left(last.created_at.timestamp(), now.timestamp())
+
+
+def apply_deviation(player: Player, param: str, stage: int = 1, summary: dict | None = None, now=None) -> bool:
+    """Намеренное отклонение: −25 по параметру и, может быть, +1 карта.
+
+    Карта не выдаётся, если снижать уже нечего (sync равен нулю) и если по этому же
+    параметру карта за отказ уже была меньше 20 минут назад: иначе отказ стал бы фермой
+    карт. Синхронизация снижается в любом случае. Возвращает True, если карта выдана.
+    """
+    now = now or timezone.now()
+    level = player.get_sync(param)
+    last_card = player.attempts.filter(param=param, deviation=True, card=True).first()
+    card = level > 0 and engine.deviation_card_allowed(
+        last_card.created_at.timestamp() if last_card else None, now.timestamp())
+    TaskAttempt.objects.create(player=player, param=param, level=level, success=False, deviation=True,
+                               card=card, stage=stage, summary=summary or {}, created_at=now)
     if level <= 0:
         return False
     player.set_sync(param, engine.after_deviation(level))
-    player.cards += 1
-    player.save(update_fields=[f'sync_{param}', 'cards'])
-    return True
+    fields = [f'sync_{param}']
+    if card:
+        player.cards += 1
+        fields.append('cards')
+    player.save(update_fields=fields)
+    return card
+
+
+def debrief(game: Game) -> dict[int, dict]:
+    """Короткая сводка тренировок для дебрифа по каждому игроку: поражения гражданских
+    силуэтов, отказы на задачах с гражданским силуэтом, отмеченные и пропущенные фантомы,
+    отказы и карты за них."""
+    rows = {pk: {'civilian_hits': 0, 'civilian_refused': 0, 'phantom_marked': 0, 'phantom_missed': 0,
+                 'refusals': 0, 'cards': 0}
+            for pk in game.players.values_list('pk', flat=True)}
+    for attempt in TaskAttempt.objects.filter(player__game=game):
+        row = rows[attempt.player_id]
+        summary = attempt.summary or {}
+        if attempt.deviation:
+            row['refusals'] += 1
+            row['cards'] += attempt.card
+            if attempt.param == 'fire' and summary.get('civilian'):
+                row['civilian_refused'] += 1
+            continue
+        if attempt.param == 'fire' and attempt.success and summary.get('fired_civilian'):
+            row['civilian_hits'] += 1
+        if attempt.param == 'parts' and 'phantom_marked' in summary:
+            row['phantom_marked' if summary['phantom_marked'] else 'phantom_missed'] += 1
+    return rows
 
 
 # --- Жетоны -----------------------------------------------------------------
@@ -250,60 +307,173 @@ NOT_YET = Outcome(LEVEL_WARN, 'Пока нет. Карта не потрачен
 NO_CARDS = Outcome(LEVEL_BAD, 'Нет карт сопротивления.')
 
 
-def _spend(player: Player, kind: str, payload: str) -> None:
+def _spend(player: Player, kind: str, payload: str, key: str = '') -> None:
     player.cards -= 1
     player.save(update_fields=['cards'])
-    Purchase.objects.create(player=player, kind=kind, payload=payload)
+    Purchase.objects.create(player=player, kind=kind, key=key, payload=payload)
 
 
-def _buy_self(player: Player, minutes: float | None) -> Outcome:
-    packs = get_content(player.game.content_name).character(player.character_id).memory
-    if player.memory_index >= len(packs):
-        return Outcome(LEVEL_WARN, 'Всё о себе уже получено. Карта не потрачена.')
-    pack = packs[player.memory_index]
+@dataclass(frozen=True)
+class Option:
+    """Вариант выбора за карту: тема памяти, действие с досье или вопрос о программе.
+
+    `state`: `open` (можно купить), `locked` (закрыт по времени, виден неактивным) или
+    `done` (уже получено). Подпись `note` не пересказывает закрытый факт.
+    """
+
+    key: str
+    title: str
+    state: str
+    note: str = ''
+
+    @property
+    def available(self) -> bool:
+        return self.state == 'open'
+
+
+NOTE_LOCKED = 'пока недоступно'
+NOTE_DONE = 'получено'
+
+
+def _option(key: str, title: str, not_before: int | None, minutes: float | None, done: bool = False,
+            done_note: str = NOTE_DONE) -> Option:
+    if done:
+        return Option(key, title, 'done', done_note)
+    if not lock_open(not_before, minutes):
+        return Option(key, title, 'locked', NOTE_LOCKED)
+    return Option(key, title, 'open')
+
+
+def _bought(player: Player, kind: str) -> set[str]:
+    return set(player.purchases.filter(kind=kind).exclude(key='').values_list('key', flat=True))
+
+
+def _rng(rng: random.Random | None) -> random.Random:
+    return rng or random.Random()
+
+
+# --- Память: «О себе» --------------------------------------------------------
+
+def free_memory(player: Player) -> list[dict]:
+    """Бесплатные пакеты памяти: № 1 сразу, № 2 после старта игры. Карта не нужна."""
+    character = get_content(player.game.content_name).character(player.character_id)
+    genders = game_genders(player.game)
+    packs = [character.memory_pack(t) for t in FREE_MEMORY_TYPES]
+    if not player.game.is_started:
+        packs = packs[:1]
+    return [{'title': 'Имя' if pack.type == 'name' else 'Воспоминание',
+             'text': render_gender(pack.text, genders)} for pack in packs]
+
+
+def memory_options(player: Player, minutes: float | None) -> list[Option]:
+    """Четыре темы памяти: каждая один раз, независимо от остальных."""
+    character = get_content(player.game.content_name).character(player.character_id)
+    bought = _bought(player, 'self')
+    return [_option(theme, MEMORY_THEME_TITLES[theme], character.memory_pack(theme).not_before,
+                    minutes, done=theme in bought)
+            for theme in MEMORY_THEMES]
+
+
+def _buy_self(player: Player, minutes: float | None, choice: str, rng: random.Random) -> Outcome:
+    if choice not in MEMORY_THEMES:
+        return Outcome(LEVEL_WARN, 'Выберите тему. Карта не потрачена.')
+    if choice in _bought(player, 'self'):
+        return Outcome(LEVEL_WARN, 'Эта тема уже получена. Карта не потрачена.')
+    pack = get_content(player.game.content_name).character(player.character_id).memory_pack(choice)
     if not lock_open(pack.not_before, minutes):
         return NOT_YET
-    if pack.requires_param_open and not engine.is_open(player.sync_values(), pack.requires_param_open):
-        return NOT_YET
     text = render_gender(pack.text, game_genders(player.game))
-    player.memory_index += 1
-    player.save(update_fields=['memory_index'])
-    _spend(player, 'self', text)
-    return Outcome(LEVEL_OK, 'Получен пакет памяти.', text)
+    _spend(player, 'self', text, key=choice)
+    return Outcome(LEVEL_OK, f'Получена тема «{MEMORY_THEME_TITLES[choice]}».', text)
 
 
-def _buy_flight(player: Player, minutes: float | None) -> Outcome:
+# --- Досье: «О звене» --------------------------------------------------------
+
+def dossier_cases_of(player: Player) -> list[dict]:
+    """Дела игрока по купленным карточкам досье; метки постоянные, по порядку открытия."""
+    opened = [tuple(key.split(':', 1)) for key in
+              player.purchases.filter(kind='flight').exclude(key='').values_list('key', flat=True)]
+    return engine.dossier_cases(opened)
+
+
+def flight_options(player: Player, minutes: float | None) -> list[Option]:
+    """Новое дело и продолжение каждого открытого дела."""
     content = get_content(player.game.content_name)
-    if not player.dossier_order:
-        player.dossier_order = engine.build_dossier_order(
-            random.Random(), [c.id for c in content.flight_characters(player.character_id)])
-        player.save(update_fields=['dossier_order'])
-    received = player.purchases.filter(kind='flight').count()
-    if received >= len(player.dossier_order):
-        return Outcome(LEVEL_WARN, 'Все карточки досье уже получены. Карта не потрачена.')
-    char_id, part = player.dossier_order[received]
+    cases = dossier_cases_of(player)
+    all_opened = len(cases) >= len(content.flight_characters(player.character_id))
+    options = [_option('new', 'Новое дело', content.dossier_locks['life'], minutes,
+                       done=all_opened, done_note='все дела открыты')]
+    for case in cases:
+        part = engine.next_dossier_part(case['parts'])
+        title = f'{case["label"]}: продолжить'
+        if part is None:
+            options.append(Option(f'case:{case["index"]}', title, 'done', 'дело закрыто'))
+        else:
+            options.append(_option(f'case:{case["index"]}', title, content.dossier_locks[part], minutes))
+    return options
+
+
+def _buy_flight(player: Player, minutes: float | None, choice: str, rng: random.Random) -> Outcome:
+    content = get_content(player.game.content_name)
+    cases = dossier_cases_of(player)
+    if choice == 'new':
+        character_id = engine.pick_new_case(
+            rng, [c.id for c in content.flight_characters(player.character_id)], cases)
+        if character_id is None:
+            return Outcome(LEVEL_WARN, 'Все дела уже открыты. Карта не потрачена.')
+        part = 'life'
+        label = engine.case_label(len(cases))
+    elif choice.startswith('case:') and choice[5:].isdigit() and int(choice[5:]) < len(cases):
+        case = cases[int(choice[5:])]
+        character_id, label = case['character_id'], case['label']
+        part = engine.next_dossier_part(case['parts'])
+        if part is None:
+            return Outcome(LEVEL_WARN, 'Дело уже закрыто. Карта не потрачена.')
+    else:
+        return Outcome(LEVEL_WARN, 'Выберите дело. Карта не потрачена.')
     if not lock_open(content.dossier_locks[part], minutes):
         return NOT_YET
-    text = render_gender(content.character(char_id).dossier[part], game_genders(player.game))
-    _spend(player, 'flight', text)
-    return Outcome(LEVEL_OK, 'Получена карточка досье.', text)
+    text = render_gender(content.character(character_id).dossier[part], game_genders(player.game))
+    _spend(player, 'flight', text, key=f'{character_id}:{part}')
+    return Outcome(LEVEL_OK, f'Получена карточка досье: {label}.', f'{label} · {DOSSIER_PART_TITLES[part]}\n\n{text}')
 
 
-def _buy_program(player: Player, minutes: float | None) -> Outcome:
-    program = get_content(player.game.content_name).program
-    if player.program_index >= len(program):
-        return Outcome(LEVEL_WARN, 'Вся программа уже получена. Карта не потрачена.')
-    pack = program[player.program_index]
-    if not lock_open(pack.not_before, minutes):
+# --- Программа: «О программе» ------------------------------------------------
+
+def background_summaries(player: Player, now=None) -> list[dict]:
+    """Фоновые сводки, чей замок наступил: появляются сами, без карты и без объявления."""
+    minutes = player.game.game_minutes(now)
+    genders = game_genders(player.game)
+    return [{'topic': p.topic, 'text': render_gender(p.text, genders)}
+            for p in get_content(player.game.content_name).free_program
+            if lock_open(p.not_before, minutes)]
+
+
+def program_options(player: Player, minutes: float | None) -> list[Option]:
+    """Три вопроса о программе: каждый один раз, независимо от остальных."""
+    bought = _bought(player, 'program')
+    return [_option(q.id, q.title, q.not_before, minutes, done=q.id in bought)
+            for q in get_content(player.game.content_name).program_questions]
+
+
+def _buy_program(player: Player, minutes: float | None, choice: str, rng: random.Random) -> Outcome:
+    content = get_content(player.game.content_name)
+    question = content.program_question(choice)
+    if question is None:
+        return Outcome(LEVEL_WARN, 'Выберите вопрос. Карта не потрачена.')
+    if choice in _bought(player, 'program'):
+        return Outcome(LEVEL_WARN, 'Этот вопрос уже задан. Карта не потрачена.')
+    if not lock_open(question.not_before, minutes):
         return NOT_YET
-    text = render_gender(pack.text, game_genders(player.game))
-    player.program_index += 1
-    player.save(update_fields=['program_index'])
-    _spend(player, 'program', text)
-    return Outcome(LEVEL_OK, 'Получен пакет о программе.', text)
+    genders = game_genders(player.game)
+    text = '\n\n'.join(render_gender(content.program_pack(pid).text, genders) for pid in question.packs)
+    _spend(player, 'program', text, key=choice)
+    return Outcome(LEVEL_OK, f'Ответ на вопрос «{question.title}».', text)
 
 
-def _buy_archive(player: Player, minutes: float | None) -> Outcome:
+# --- Архив, рация ------------------------------------------------------------
+
+def _buy_archive(player: Player, minutes: float | None, choice: str, rng: random.Random) -> Outcome:
     queue = get_content(player.game.content_name).archive_queue
     opened = set(player.archive_opens.values_list('code', flat=True))
     entry = next((e for e in queue if e.code not in opened), None)
@@ -316,7 +486,7 @@ def _buy_archive(player: Player, minutes: float | None) -> Outcome:
     return Outcome(LEVEL_OK, 'Получена запись архива.', _entry_payload(entry, game_genders(player.game)))
 
 
-def _buy_radio(player: Player, minutes: float | None) -> Outcome:
+def _buy_radio(player: Player, minutes: float | None, choice: str, rng: random.Random) -> Outcome:
     if player.radio_level >= RADIO_MAX:
         return Outcome(LEVEL_WARN, 'Рация уже работает и на посту. Карта не потрачена.')
     player.radio_level += 1
@@ -336,12 +506,16 @@ BUYERS = {
 }
 
 
-def buy(player: Player, kind: str, now=None) -> Outcome:
-    """Потратить одну карту. Если пакет закрыт или кончился, карта остаётся."""
+def buy(player: Player, kind: str, choice: str = '', now=None, rng: random.Random | None = None) -> Outcome:
+    """Потратить одну карту. Если выбранное закрыто по времени, уже получено или кончилось, карта остаётся.
+
+    `choice` — выбор игрока: тема памяти, `new` или `case:<номер>` для досье, id вопроса
+    программы; для архива и рации он не нужен. `rng` нужен тестам для случайного дела.
+    """
     if kind not in BUYERS:
         return Outcome(LEVEL_BAD, 'Неизвестная трата.')
     with transaction.atomic():
         player = Player.objects.select_for_update().select_related('game').get(pk=player.pk)
         if player.cards < 1:
             return NO_CARDS
-        return BUYERS[kind](player, player.game.game_minutes(now))
+        return BUYERS[kind](player, player.game.game_minutes(now), choice, _rng(rng))

@@ -14,7 +14,8 @@
 </div>
 <div class="panel row" style="margin-top:14px">
   <div>Игровое время: <strong class="mono" style="font-size:22px">{{ minutes }}</strong>
-    <span class="dim mono">сдвиг {{ offset_minutes }} мин</span></div>
+    <span class="dim mono">сдвиг {{ offset_minutes }} мин</span>
+    <div class="mono">Этап {{ stage }} «{{ stage_title }}» <span class="dim">· потолок синхронизации {{ stage_cap }}%</span></div></div>
   <form method="post" action="{% url 'ls:master_action' game.pk %}" class="row">
     {% csrf_token %}
     <button name="op" value="start" class="primary"{% if game.is_started %} disabled{% endif %}>Старт</button>
@@ -34,7 +35,7 @@
     <div class="grow">
       <strong>{{ f.flight.name }}</strong>
       {% for p in f.players %}
-      <div><label><input type="checkbox" name="players" value="{{ p.pk }}"> {{ p.callsign }}{% if p.is_imp %} <span class="tag">ИМП</span>{% endif %}</label></div>
+      <div><label><input type="checkbox" name="players" value="{{ p.pk }}"> {{ p.callsign }}</label></div>
       {% endfor %}
     </div>
     {% endfor %}
@@ -58,11 +59,11 @@
 <div class="panel table-wrap">
 <table>
   <tr><th>Позывной</th><th>Имя</th><th>Пол</th><th>Звено</th><th>Символ</th>
-    <th>Навигация</th><th>Движение</th><th>Части</th><th>Огонь</th>
+    <th>Навигация</th><th>Движение</th><th>Части</th><th>Восприятие</th><th>Огонь</th>
     <th>Карты</th><th>Рация</th><th>Покупок</th><th>Архив</th></tr>
   {% for p in players %}
   <tr id="p{{ p.pk }}">
-    <td><a href="{% url 'ls:master_player' game.pk p.pk %}">{{ p.callsign }}</a>{% if p.is_imp %} <span class="tag">ИМП</span>{% endif %}</td>
+    <td><a href="{% url 'ls:master_player' game.pk p.pk %}">{{ p.callsign }}</a></td>
     <td>{{ p.character_name }}</td>
     <td>
       <form method="post" action="{% url 'ls:master_action' game.pk %}">
@@ -105,5 +106,20 @@
   {% endfor %}
 </table>
 </div>
+<h2>Дебриф тренировок</h2>
+<div class="panel table-wrap">
+<table>
+  <tr><th>Позывной</th><th>Поражено гражданских</th><th>Отказ при гражданской</th>
+    <th>Фантом отмечен</th><th>Фантом пропущен</th><th>Отказов</th><th>Карт за отказ</th></tr>
+  {% for p in players %}
+  <tr><td><a href="{% url 'ls:master_player' game.pk p.pk %}">{{ p.callsign }}</a></td>
+    <td class="mono">{{ p.debrief.civilian_hits }}</td><td class="mono">{{ p.debrief.civilian_refused }}</td>
+    <td class="mono">{{ p.debrief.phantom_marked }}</td><td class="mono">{{ p.debrief.phantom_missed }}</td>
+    <td class="mono">{{ p.debrief.refusals }}</td><td class="mono">{{ p.debrief.cards }}</td></tr>
+  {% endfor %}
+</table>
+</div>
+<p class="dim" style="font-size:13px">Подробно по каждой задаче — в журнале игрока (по позывному). Этап — общий для зала по игровому времени: 1 «Привыкание» до 55-й минуты, 2 «Сбои» до 85-й, 3 «Готовность».</p>
+
 <p class="dim" style="font-size:13px">Пол можно менять в любой момент, но уже выданные пакеты памяти, досье, программы и записи архива не перерисовываются: текст подставляется при выдаче. Записи архива в «Что я знаю» берут пол на момент показа.</p>
 {% endblock %}

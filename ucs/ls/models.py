@@ -17,6 +17,7 @@ PARAM_CHOICES = [
     ('nav', 'Навигация'),
     ('move', 'Движение'),
     ('parts', 'Части'),
+    ('sense', 'Восприятие'),
     ('fire', 'Огонь'),
 ]
 PURCHASE_KINDS = [
@@ -81,20 +82,21 @@ class Player(models.Model):
     flight = models.ForeignKey(Flight, on_delete=models.CASCADE, related_name='players')
     callsign = models.CharField('позывной', max_length=64)
     symbol = models.CharField('символ', max_length=16, choices=SYMBOL_CHOICES)
-    is_imp = models.BooleanField('ИМП', default=False)
+    is_imp = models.BooleanField('ИМП (не используется)', default=False)
     character_id = models.CharField('персонаж', max_length=32)
     gender = models.CharField('пол роли', max_length=1, choices=GENDER_CHOICES, default='m')
 
     sync_nav = models.PositiveSmallIntegerField(default=0)
     sync_move = models.PositiveSmallIntegerField(default=0)
     sync_parts = models.PositiveSmallIntegerField(default=0)
+    sync_sense = models.PositiveSmallIntegerField(default=0)
     sync_fire = models.PositiveSmallIntegerField(default=0)
+    # Выданные и ещё не отвеченные задачи: {параметр: задача}. Лежат в базе, а не в сессии,
+    # чтобы повторный вход или другой браузер не давали новую задачу вместо неудобной.
+    tasks = models.JSONField('текущие задачи', default=dict, blank=True)
 
     cards = models.PositiveIntegerField('карты', default=0)
     radio_level = models.PositiveSmallIntegerField('рация', default=0)
-    dossier_order = models.JSONField('порядок досье', default=list, blank=True)
-    memory_index = models.PositiveSmallIntegerField(default=0)
-    program_index = models.PositiveSmallIntegerField(default=0)
     wrong_codes = models.PositiveSmallIntegerField('неверных кодов подряд', default=0)
     codes_blocked_until = models.DateTimeField('ввод кодов закрыт до', null=True, blank=True)
 
@@ -112,6 +114,7 @@ class Player(models.Model):
             'nav': self.sync_nav,
             'move': self.sync_move,
             'parts': self.sync_parts,
+            'sense': self.sync_sense,
             'fire': self.sync_fire,
         }
 
@@ -200,6 +203,7 @@ class ArchiveOpen(models.Model):
 class Purchase(models.Model):
     player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name='purchases')
     kind = models.CharField(max_length=16, choices=PURCHASE_KINDS)
+    key = models.CharField('что выбрано', max_length=64, blank=True, default='')
     payload = models.TextField('выдано', blank=True)
     created_at = models.DateTimeField(default=timezone.now)
 
@@ -225,6 +229,9 @@ class TaskAttempt(models.Model):
     level = models.PositiveSmallIntegerField('sync на момент попытки', default=0)
     success = models.BooleanField(default=False)
     deviation = models.BooleanField('отказ', default=False)
+    card = models.BooleanField('карта за отказ', default=False)
+    stage = models.PositiveSmallIntegerField('этап', default=1)
+    summary = models.JSONField('сводка задачи', default=dict, blank=True)
     created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:

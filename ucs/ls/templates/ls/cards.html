@@ -1,5 +1,15 @@
 {% extends "ls/base.html" %}
 {% block title %}Карты · {{ player.callsign }}{% endblock %}
+{% block style %}
+  .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin-top: 12px; }
+  .choice { margin: 0; }
+  .choice button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
+    width: 100%; min-height: 44px; text-align: left; gap: 2px; }
+  .choice button small { font-size: 12px; color: var(--dim); }
+  @media (max-width: 600px) {
+    .choices { grid-template-columns: 1fr; }
+  }
+{% endblock %}
 {% block content %}
 <h2>Карты сопротивления</h2>
 <div class="panel row">
@@ -8,6 +18,25 @@
 </div>
 <div class="params">
   {% for k in kinds %}
+  {% if k.options %}
+  <div class="panel" style="margin:0">
+    <strong>{{ k.title }}</strong>
+    <div class="dim" style="font-size:14px">{{ k.hint }}</div>
+    <div class="choices">
+      {% for o in k.options %}
+      <form method="post" class="choice">
+        {% csrf_token %}
+        <input type="hidden" name="kind" value="{{ k.key }}">
+        <input type="hidden" name="choice" value="{{ o.key }}">
+        <button{% if o.available %} class="primary"{% endif %}{% if not o.available or player.cards < 1 %} disabled{% endif %}>
+          <span>{{ o.title }}</span>
+          {% if o.note %}<small>{{ o.note }}</small>{% endif %}
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
   <form method="post" class="panel row" style="margin:0">
     {% csrf_token %}
     <input type="hidden" name="kind" value="{{ k.key }}">
@@ -17,8 +46,9 @@
     </div>
     <button class="primary"{% if player.cards < 1 %} disabled{% endif %}>Потратить 1</button>
   </form>
+  {% endif %}
   {% endfor %}
 </div>
-<p class="dim">Если пакет закрыт, ответ будет «Пока нет», и карта останется у вас. Полученное хранится на странице «Что я знаю».</p>
+<p class="dim">Недоступное сейчас видно, но неактивно. Если нажать на закрытое, ответ будет «Пока нет», и карта останется у вас. Полученное хранится на странице «Что я знаю».</p>
 <p><a class="btn" href="{% url 'ls:known' %}">Что я знаю</a></p>
 {% endblock %}

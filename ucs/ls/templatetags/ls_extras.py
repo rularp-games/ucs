@@ -27,6 +27,8 @@ SILHOUETTES = {
               '<path d="M6 10v8M6 22v8M54 10v8M54 22v8"/>',
     'tug': '<rect x="14" y="14" width="22" height="14"/><path d="M36 21h18M54 16v10M8 18l6 3-6 3"/>',
     'probe': '<circle cx="24" cy="20" r="9"/><path d="M33 20h22M50 14l6 6-6 6M24 11V4M24 29v7"/>',
+    'container': '<rect x="10" y="9" width="40" height="22"/><path d="M18 9v22M26 9v22M34 9v22M42 9v22"/>'
+                 '<path d="M10 4h40"/>',
 }
 
 
@@ -42,13 +44,17 @@ def symbol_icon(key: str, size: int = 28):
 
 
 @register.simple_tag
-def silhouette(key: str):
-    """Силуэт цели в режиме «Опознание»."""
+def silhouette(key: str, rot: int = 0, css: str = 'sil'):
+    """Силуэт цели в режиме «Опознание», повёрнутый на `rot` градусов вокруг центра.
+
+    Рамка квадратная (60×60 вокруг центра силуэта), поэтому поворот на 90° не обрезает рисунок.
+    """
     shape = SILHOUETTES.get(key, '')
     return format_html(
-        '<svg class="sil" viewBox="0 0 60 40" fill="none" stroke="currentColor" stroke-width="1.6" '
-        'stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">{}</svg>',
-        mark_safe(shape),
+        '<svg class="{}" viewBox="0 -10 60 60" fill="none" stroke="currentColor" stroke-width="1.6" '
+        'stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">'
+        '<g transform="rotate({} 30 20)">{}</g></svg>',
+        css, int(rot or 0), mark_safe(shape),
     )
 
 

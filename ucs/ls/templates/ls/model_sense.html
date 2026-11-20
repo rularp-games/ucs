@@ -1,0 +1,118 @@
+{% extends "ls/model_base.html" %}
+{% block instruction %}Масса не видна, но звёзды за ней расступаются: вокруг неё пустота, а по краю пустоты звёзды ярче, кольцом. Найдите пустоту с кольцом и нажмите в её центр.{% if glow %} Край экрана светится с той стороны, откуда давление.{% endif %}{% endblock %}
+{% block style %}
+  .fieldwrap { max-width: 640px; }
+  .sky { width: 100%; height: auto; display: block; background: #070b11; border: 1px solid var(--line); border-radius: 4px; touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: crosshair; }
+  .sky .grid { fill: none; stroke: #161f2d; stroke-width: 1; pointer-events: none; }
+  .sky .star { fill: #a9bbd3; pointer-events: none; }
+  .sky .frame { transition: opacity .6s; }
+  .sky .frame.off { opacity: 0; }
+  .sky.gone .frame { opacity: 0 !important; transition: opacity 1.2s; }
+  .sky .tap { fill: none; stroke: #e5cf8f; stroke-width: 2.5; pointer-events: none; }
+  .sky .tap-dot { fill: #e5cf8f; pointer-events: none; }
+  .sky .glow { pointer-events: none; }
+  .task-line { font-size: 18px; }
+  @media (max-width: 600px) {
+    .task-line { font-size: 16px; }
+    #answer-form button { flex: 1 1 40%; }
+    #progress { flex: 1 1 100%; text-align: center; }
+  }
+{% endblock %}
+{% block task %}
+{% if not auto %}
+<div class="panel task-line">
+  <div class="mono">Учебное наблюдение.</div>
+  Источник скрыт. Положение определять не по изображению. Отметить, откуда приходит давление.
+  {% if task.motion %}<br><span class="dim">Два кадра. Отметить, где источник будет через два такта.</span>
+  {% elif need > 1 %}<br><span class="dim">Источников давления: {{ need }}.</span>{% endif %}
+  {% if task.flash %}<br><span class="dim">Поле видно {{ task.flash }} с.</span>{% endif %}
+</div>
+<div class="fieldwrap">
+  <svg class="sky" id="sky" viewBox="0 0 {{ width }} {{ height }}" style="aspect-ratio: {{ width }} / {{ height }}" role="img" aria-label="Звёздное поле">
+    <defs>
+      <linearGradient id="glow-left" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#6cb4e6" stop-opacity=".45"/><stop offset="1" stop-color="#6cb4e6" stop-opacity="0"/></linearGradient>
+      <linearGradient id="glow-right" x1="1" x2="0" y1="0" y2="0"><stop offset="0" stop-color="#6cb4e6" stop-opacity=".45"/><stop offset="1" stop-color="#6cb4e6" stop-opacity="0"/></linearGradient>
+      <linearGradient id="glow-top" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#6cb4e6" stop-opacity=".45"/><stop offset="1" stop-color="#6cb4e6" stop-opacity="0"/></linearGradient>
+      <linearGradient id="glow-bottom" x1="0" x2="0" y1="1" y2="0"><stop offset="0" stop-color="#6cb4e6" stop-opacity=".45"/><stop offset="1" stop-color="#6cb4e6" stop-opacity="0"/></linearGradient>
+    </defs>
+    {% for g in glow %}
+      {% if g.side == 'left' %}<rect class="glow" x="0" y="0" width="44" height="{{ height }}" fill="url(#glow-left)" opacity="{{ g.strength }}"/>
+      {% elif g.side == 'right' %}<rect class="glow" x="{{ width|add:-44 }}" y="0" width="44" height="{{ height }}" fill="url(#glow-right)" opacity="{{ g.strength }}"/>
+      {% elif g.side == 'top' %}<rect class="glow" x="0" y="0" width="{{ width }}" height="44" fill="url(#glow-top)" opacity="{{ g.strength }}"/>
+      {% else %}<rect class="glow" x="0" y="{{ height|add:-44 }}" width="{{ width }}" height="44" fill="url(#glow-bottom)" opacity="{{ g.strength }}"/>{% endif %}
+    {% endfor %}
+    {% for c in cells %}<rect class="grid" x="{{ c.x }}" y="{{ c.y }}" width="{{ cell }}" height="{{ cell }}"/>{% endfor %}
+    {% for frame in frames %}
+    <g class="frame{% if not forloop.first %} off{% endif %}">{% for s in frame %}<circle class="star" cx="{{ s.x }}" cy="{{ s.y }}" r="{{ s.r }}"/>{% endfor %}</g>
+    {% endfor %}
+    <g id="taps"></g>
+  </svg>
+</div>
+<form method="post" id="answer-form" class="row" style="margin-top:14px">
+  {% csrf_token %}
+  <input type="hidden" name="answer" id="answer" value="">
+  <button type="button" id="reset">Сброс</button>
+  <button class="primary" id="confirm" disabled>Подтвердить</button>
+  <span class="mono dim" id="progress"></span>
+</form>
+{% endif %}
+{% endblock %}
+{% block script %}
+{% if not auto %}
+<script>
+(function () {
+  // Нажимается точка, а не клетка: координаты уходят на сервер в долях клетки.
+  var need = {{ need }}, cell = {{ cell }}, width = {{ width }}, height = {{ height }};
+  var sky = document.getElementById('sky');
+  var taps = document.getElementById('taps');
+  var answer = document.getElementById('answer');
+  var confirmBtn = document.getElementById('confirm');
+  var progress = document.getElementById('progress');
+  var NS = 'http://www.w3.org/2000/svg';
+  var points = [];
+
+  function redraw() {
+    taps.innerHTML = '';
+    points.forEach(function (p) {
+      var ring = document.createElementNS(NS, 'circle');
+      ring.setAttribute('class', 'tap');
+      ring.setAttribute('cx', p[0] * cell); ring.setAttribute('cy', p[1] * cell); ring.setAttribute('r', 14);
+      var dot = document.createElementNS(NS, 'circle');
+      dot.setAttribute('class', 'tap-dot');
+      dot.setAttribute('cx', p[0] * cell); dot.setAttribute('cy', p[1] * cell); dot.setAttribute('r', 3);
+      taps.appendChild(ring); taps.appendChild(dot);
+    });
+    answer.value = points.map(function (p) { return p[0].toFixed(2) + ':' + p[1].toFixed(2); }).join(';');
+    confirmBtn.disabled = points.length !== need;
+    progress.textContent = points.length + ' / ' + need;
+  }
+  sky.addEventListener('click', function (e) {
+    if (points.length >= need) return;
+    var pt = sky.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    var p = pt.matrixTransform(sky.getScreenCTM().inverse());
+    var x = Math.max(0, Math.min(width, p.x)) / cell, y = Math.max(0, Math.min(height, p.y)) / cell;
+    points.push([x, y]);
+    redraw();
+  });
+  document.getElementById('reset').addEventListener('click', function () { points = []; redraw(); });
+
+  var frames = Array.prototype.slice.call(sky.querySelectorAll('.frame'));
+  if (frames.length > 1) {
+    // «Готовность»: два кадра поочерёдно — масса сдвигается за такт.
+    var shown = 0;
+    setInterval(function () {
+      frames[shown].classList.add('off');
+      shown = (shown + 1) % frames.length;
+      frames[shown].classList.remove('off');
+    }, {{ frame_ms }});
+  }
+  {% if task.flash %}
+  // Поле видно несколько секунд и гаснет: отметить по памяти.
+  setTimeout(function () { sky.classList.add('gone'); }, {{ task.flash }} * 1000);
+  {% endif %}
+  redraw();
+})();
+</script>
+{% endif %}
+{% endblock %}
