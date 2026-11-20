@@ -18,7 +18,7 @@
   <p class="mono" style="color:var(--warn);margin-top:0">Поле закрыто. Подождите {{ blocked_seconds }} с.</p>
   {% endif %}
   <label class="field">Код. Можно несколько через пробел.
-    <input type="text" name="codes" autocomplete="off" inputmode="numeric" spellcheck="false"{% if blocked_seconds %} disabled{% else %} autofocus{% endif %}>
+    <input type="text" name="codes" autocomplete="off" inputmode="numeric" spellcheck="false"{% if blocked_seconds %} disabled{% elif not messages %} autofocus{% endif %}>
   </label>
   <button class="primary"{% if blocked_seconds %} disabled{% endif %}>Ввести</button>
 </form>

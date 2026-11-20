@@ -728,6 +728,14 @@ class DarkTests(TestCase):
             self.assertNotContains(response, old.code)
         self.assertContains(self.client.get(reverse('ls:post')), 'location.reload')
 
+    def test_banner_shows_minutes_left_not_clock(self):
+        player = first_player(self.game)
+        give_token(self.game, player, 'cross', '4321', minutes_ago=5)
+        login(self.client, self.game, player)
+        response = self.client.get(reverse('ls:post'))
+        self.assertContains(response, 'ещё 15 мин')
+        self.assertNotContains(response, ' · до ')
+
     def test_banner_disappears_when_token_used_or_expired(self):
         player = first_player(self.game)
         other = self.game.players.exclude(pk=player.pk).first()
@@ -920,6 +928,12 @@ class ArchiveCodeTests(TestCase):
         response = self.client.post(reverse('ls:codes'), {'codes': '6060'}, follow=True)
         self.assertContains(response, 'Институт дальних экспедиций')
         self.assertContains(response, '<li class="payload')
+        # поле без автофокуса, иначе страница уезжает к нему и текст записи остаётся за экраном
+        self.assertNotContains(response, 'autofocus')
+
+    def test_code_field_has_autofocus_without_messages(self):
+        login(self.client, self.game, self.player)
+        self.assertContains(self.client.get(reverse('ls:codes')), 'autofocus')
 
     def test_known_page_lists_archive_in_opening_order(self):
         login(self.client, self.game, self.player)

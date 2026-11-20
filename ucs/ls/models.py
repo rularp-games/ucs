@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import timedelta
 
 from django.db import models
@@ -161,6 +162,12 @@ class Token(models.Model):
     @property
     def expires_at(self):
         return self.issued_at + TOKEN_TTL
+
+    @property
+    def minutes_left(self) -> int:
+        """Сколько минут жетон ещё действует, с округлением вверх: игроку показывается остаток, а не время по часам."""
+        seconds = (self.expires_at - timezone.now()).total_seconds()
+        return max(0, math.ceil(seconds / 60))
 
     def is_expired(self, now=None) -> bool:
         return (now or timezone.now()) >= self.expires_at
