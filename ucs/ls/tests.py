@@ -57,15 +57,17 @@ def load_yaml() -> dict:
 # --- Движок: цепочка и уровни -----------------------------------------------
 
 class SyncRulesTests(SimpleTestCase):
-    def test_chain_opening(self):
-        self.assertTrue(engine.is_open({'nav': 0}, 'nav'))
-        self.assertFalse(engine.is_open({'nav': 25}, 'move'))
-        self.assertTrue(engine.is_open({'nav': 50}, 'move'))
-        self.assertFalse(engine.is_open({'nav': 100, 'move': 25}, 'fire'))
+    def test_peaceful_params_open_from_start(self):
+        for param in ('nav', 'move', 'parts'):
+            self.assertTrue(engine.is_open({}, param))
+
+    def test_fire_opens_by_chain(self):
+        self.assertFalse(engine.is_open({'nav': 100, 'move': 100, 'parts': 25}, 'fire'))
+        self.assertTrue(engine.is_open({'parts': 50}, 'fire'))
 
     def test_open_param_stays_open_after_previous_drops(self):
-        self.assertTrue(engine.is_open({'nav': 25, 'move': 25}, 'move'))
-        self.assertFalse(engine.is_open({'nav': 25, 'move': 0}, 'move'))
+        self.assertTrue(engine.is_open({'parts': 25, 'fire': 25}, 'fire'))
+        self.assertFalse(engine.is_open({'parts': 25, 'fire': 0}, 'fire'))
 
     def test_modes(self):
         sync = {'nav': 25}
@@ -76,7 +78,7 @@ class SyncRulesTests(SimpleTestCase):
         self.assertEqual(engine.mode_of(sync, 'nav'), engine.MODE_SHORT)
         sync['nav'] = 100
         self.assertEqual(engine.mode_of(sync, 'nav'), engine.MODE_AUTO)
-        self.assertEqual(engine.mode_of({'nav': 25}, 'move'), engine.MODE_CLOSED)
+        self.assertEqual(engine.mode_of({'parts': 25}, 'fire'), engine.MODE_CLOSED)
 
     def test_steps_are_clamped(self):
         self.assertEqual(engine.after_success(100), 100)
@@ -495,24 +497,28 @@ class ChainViewTests(TestCase):
             setattr(self.player, f'sync_{key}', value)
         self.player.save()
 
-    def test_move_closed_at_nav_25_open_at_50(self):
-        self.set_sync(nav=25)
-        response = self.client.get(reverse('ls:model', args=['move']))
+    def test_peaceful_models_open_at_start(self):
+        for param in ('nav', 'move', 'parts'):
+            self.assertEqual(self.client.get(reverse('ls:model', args=[param])).status_code, 200)
+
+    def test_fire_closed_at_parts_25_open_at_50(self):
+        self.set_sync(parts=25)
+        response = self.client.get(reverse('ls:model', args=['fire']))
         self.assertRedirects(response, reverse('ls:post'))
-        self.set_sync(nav=50)
-        self.assertEqual(self.client.get(reverse('ls:model', args=['move'])).status_code, 200)
+        self.set_sync(parts=50)
+        self.assertEqual(self.client.get(reverse('ls:model', args=['fire'])).status_code, 200)
 
-    def test_deviation_keeps_move_open_if_it_has_sync(self):
-        self.set_sync(nav=50, move=25)
-        self.client.post(reverse('ls:model', args=['nav']), {'action': 'refuse'})
+    def test_deviation_keeps_fire_open_if_it_has_sync(self):
+        self.set_sync(parts=50, fire=25)
+        self.client.post(reverse('ls:model', args=['parts']), {'action': 'refuse'})
         self.player.refresh_from_db()
-        self.assertEqual(self.player.sync_nav, 25)
-        self.assertEqual(self.client.get(reverse('ls:model', args=['move'])).status_code, 200)
+        self.assertEqual(self.player.sync_parts, 25)
+        self.assertEqual(self.client.get(reverse('ls:model', args=['fire'])).status_code, 200)
 
-    def test_move_closes_again_if_it_never_started(self):
-        self.set_sync(nav=50, move=0)
-        self.client.post(reverse('ls:model', args=['nav']), {'action': 'refuse'})
-        response = self.client.get(reverse('ls:model', args=['move']))
+    def test_fire_closes_again_if_it_never_started(self):
+        self.set_sync(parts=50, fire=0)
+        self.client.post(reverse('ls:model', args=['parts']), {'action': 'refuse'})
+        response = self.client.get(reverse('ls:model', args=['fire']))
         self.assertRedirects(response, reverse('ls:post'))
 
     def test_instruction_levels(self):
@@ -646,13 +652,17 @@ class ModelFlowTests(TestCase):
         self.assertEqual((self.player.sync_nav, self.player.cards), (0, 0))
 
     def test_opening_announcement(self):
-        self.player.sync_nav = 25
-        self.player.sync_move = 0
+        self.player.sync_parts = 25
+        self.player.sync_fire = 0
         self.player.save()
-        task = self.task('nav')
-        response = self.client.post(reverse('ls:model', args=['nav']),
-                                    {'answer': ','.join(engine.nav_expected(task))})
-        self.assertContains(response, 'Доступно: Движение')
+        task = self.task('parts')
+        state = list(task['initial'])
+        for item in task['items']:
+            if item['switch'] is not None:
+                state[item['switch']] = item['value']
+        response = self.client.post(reverse('ls:model', args=['parts']),
+                                    {'answer': ''.join('1' if v else '0' for v in state)})
+        self.assertContains(response, 'Доступно: Огонь')
 
 
 # --- Жетоны -----------------------------------------------------------------
@@ -1235,13 +1245,8 @@ class CardTests(TestCase):
         self.assertEqual(services.buy(self.player, 'self').payload, shown(self.game, packs[0].text))   # без замка
         self.assertEqual(services.buy(self.player, 'self').payload, shown(self.game, packs[1].text))   # 25
         self.assertEqual(services.buy(self.player, 'self').payload, shown(self.game, packs[2].text))   # 25
-        # телесный пакет ждёт открытия параметра parts
-        self.assertIn('Пока нет', services.buy(self.player, 'self').message)
-        self.player.refresh_from_db()
-        self.player.sync_nav = self.player.sync_move = 50
-        self.player.sync_parts = 25
-        self.player.save()
-        self.assertEqual(services.buy(self.player, 'self').payload, packs[3].text)
+        # телесный пакет ждёт открытия параметра parts, а части открыты с начала игры
+        self.assertEqual(services.buy(self.player, 'self').payload, shown(self.game, packs[3].text))
         # смерть не раньше 70-й минуты
         self.assertIn('Пока нет', services.buy(self.player, 'self').message)
 

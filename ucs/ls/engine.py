@@ -30,6 +30,7 @@ MODEL_TITLES = {
 SYNC_STEP = 25
 SYNC_MAX = 100
 OPEN_THRESHOLD = 50  # предыдущий параметр открывает следующий при этом значении
+OPEN_FROM_START = ('nav', 'move', 'parts')  # мирные параметры открыты сразу, огонь — по цепочке
 
 MODE_CLOSED = 'closed'
 MODE_INSTRUCTION = 'instruction'  # sync < 50: полная модель с инструкцией
@@ -39,14 +40,15 @@ MODE_AUTO = 'auto'                # 100: автоматика
 
 
 def is_open(sync: dict[str, int], param: str) -> bool:
-    """Параметр открыт, если он nav, или уже сдвинут с нуля, или предыдущий >= 50.
+    """Параметр открыт, если он мирный (навигация, движение, части), или уже
+    сдвинут с нуля, или предыдущий >= 50. По цепочке открывается только огонь.
 
-    Открытость считается по текущим значениям: отклонение по nav не закрывает
-    move обратно, пока у move самого есть синхронизация.
+    Открытость считается по текущим значениям: отклонение по parts не закрывает
+    fire обратно, пока у fire самого есть синхронизация.
     """
-    index = PARAMS.index(param)
-    if index == 0:
+    if param in OPEN_FROM_START:
         return True
+    index = PARAMS.index(param)
     if sync.get(param, 0) > 0:
         return True
     return sync.get(PARAMS[index - 1], 0) >= OPEN_THRESHOLD

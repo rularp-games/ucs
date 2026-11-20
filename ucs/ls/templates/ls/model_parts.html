@@ -1,7 +1,7 @@
 {% extends "ls/model_base.html" %}
 {% block instruction %}Выполните чек-лист. Остальные положения не менять.{% endblock %}
 {% block style %}
-  .switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .switches { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
   .sw { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; user-select: none; }
   .sw input { position: absolute; opacity: 0; pointer-events: none; }
   .sw .track { width: 46px; height: 24px; border-radius: 12px; background: #0c121b; border: 1px solid var(--line); position: relative; flex: none; transition: background .12s; }
@@ -9,7 +9,9 @@
   .sw input:checked + .track { background: #17314a; border-color: var(--accent); }
   .sw input:checked + .track::after { left: 24px; background: var(--accent); }
   .sw input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .sw .state { margin-left: auto; font: 11px ui-monospace, monospace; color: var(--dim); }
+  .sw .lbl { display: flex; flex-direction: column; min-width: 0; }
+  .sw .name { white-space: nowrap; }
+  .sw .state { font: 11px ui-monospace, monospace; color: var(--dim); }
   .checklist li { padding: 3px 0; font-size: 17px; }
 {% endblock %}
 {% block task %}
@@ -25,8 +27,10 @@
   <label class="sw">
     <input type="checkbox" data-i="{{ s.index }}"{% if s.on %} checked{% endif %}>
     <span class="track"></span>
-    <span>{{ s.name }}</span>
-    <span class="state"></span>
+    <span class="lbl">
+      <span class="name">{{ s.name }}</span>
+      <span class="state"></span>
+    </span>
   </label>
   {% endfor %}
 </div>
