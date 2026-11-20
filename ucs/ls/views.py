@@ -17,12 +17,13 @@ from django.views.decorators.http import require_POST
 
 from . import engine, services
 from .loader import ContentError, available_contents, get_content
-from .models import Game, Player, RadioMessage
+from .models import TOKEN_TTL, Game, Player, RadioMessage
 from .services import LEVEL_BAD, LEVEL_OK
 
 SESSION_KEY = 'ls_player_id'
 TASK_KEY = 'ls_task_{}'
 RADIO_LIMIT = 100
+DARK_LIMIT = 10
 
 MODE_LABELS = {
     engine.MODE_CLOSED: 'закрыто',
@@ -120,7 +121,11 @@ def post(request):
             'mode': mode,
             'label': MODE_LABELS[mode],
         })
-    return render_player(request, 'ls/post.html', {'params': params, 'active': 'post'})
+    return render_player(request, 'ls/post.html', {
+        'params': params,
+        'dark_tokens': services.active_tokens(player),
+        'active': 'post',
+    })
 
 
 # --- Модели тренировок ------------------------------------------------------
@@ -282,18 +287,25 @@ def model(request, param):
 # --- Сопротивление ----------------------------------------------------------
 
 @player_required
-def tokens(request):
+def codes(request):
+    player = request.player
     if request.method == 'POST':
-        for outcome in services.redeem_codes(request.player, request.POST.get('codes', '')):
+        for outcome in services.redeem_codes(player, request.POST.get('codes', '')):
             flash(request, outcome)
-        return redirect('ls:tokens')
-    return render_player(request, 'ls/tokens.html', {'active': 'tokens'})
+        return redirect('ls:codes')
+    return render_player(request, 'ls/codes.html', {
+        'dark_tokens': services.active_tokens(player),
+        'blocked_seconds': services.block_seconds(player),
+        'ttl_minutes': int(TOKEN_TTL.total_seconds() // 60),
+        'active': 'codes',
+    })
 
 
 CARD_KINDS = [
     ('self', 'О себе', 'Следующий пакет памяти вашего персонажа.'),
     ('flight', 'О звене', 'Следующая карточка досье на кого-то из звена. Чей это позывной, не сказано.'),
     ('program', 'О программе', 'Следующий пакет о программе и мире вокруг неё.'),
+    ('archive', 'Архив', 'Следующая запись из очереди архива. Записи вне очереди открываются только кодом.'),
     ('radio', 'Рация', 'Первая покупка открывает эфир, вторая позволяет пользоваться рацией и на посту.'),
 ]
 
@@ -319,7 +331,12 @@ def known(request):
         {'title': title, 'items': list(player.purchases.filter(kind=kind))}
         for kind, title in streams
     ]
-    return render_player(request, 'ls/known.html', {'sections': sections, 'active': 'known'})
+    entries = {e.code: e for e in get_content(player.game.content_name).archive}
+    archive = [
+        {'code': o.code, 'title': entries[o.code].title, 'text': entries[o.code].text}
+        for o in player.archive_opens.all() if o.code in entries
+    ]
+    return render_player(request, 'ls/known.html', {'sections': sections, 'archive': archive, 'active': 'known'})
 
 
 @player_required
@@ -347,9 +364,21 @@ def format_minutes(minutes: float | None) -> str:
     return f'{sign}{total // 60}:{total % 60:02d}'
 
 
+def _content_flights(contents: list[str]) -> dict[str, int]:
+    """Сколько звеньев в каждом контенте; нечитаемый контент считается пустым."""
+    result = {}
+    for name in contents:
+        try:
+            result[name] = len(get_content(name).flights)
+        except ContentError:
+            result[name] = 0
+    return result
+
+
 @staff_member_required
 def master_index(request):
     contents = available_contents()
+    content_flights = _content_flights(contents)
     if request.method == 'POST':
         title = request.POST.get('title', '').strip()
         code = request.POST.get('code', '').strip()
@@ -365,8 +394,8 @@ def master_index(request):
             error = 'Игра с таким кодом уже есть.'
         elif content_name not in contents:
             error = 'Неизвестный контент.'
-        elif not 1 <= flights <= services.MAX_FLIGHTS:
-            error = f'Звеньев должно быть от 1 до {services.MAX_FLIGHTS}.'
+        elif not 1 <= flights <= content_flights[content_name]:
+            error = f'Звеньев в этом контенте: {content_flights[content_name]}. Нужно от 1 до этого числа.'
         if not error:
             try:
                 game = services.create_game(title, code, content_name, flights)
@@ -379,23 +408,32 @@ def master_index(request):
         return redirect('ls:master_index')
     games = Game.objects.annotate(player_count=Count('players', distinct=True))
     return render(request, 'ls/master_index.html', {
-        'games': games, 'contents': contents, 'max_flights': services.MAX_FLIGHTS,
+        'games': games,
+        'contents': [{'name': name, 'flights': content_flights[name]} for name in contents],
+        'max_flights': max(content_flights.values(), default=1) or 1,
     })
 
 
 @staff_member_required
 def master_game(request, game_id):
     game = get_object_or_404(Game, pk=game_id)
-    players = list(game.players.select_related('flight').annotate(purchase_count=Count('purchases')))
+    players = list(game.players.select_related('flight').annotate(
+        purchase_count=Count('purchases', distinct=True),
+        archive_count=Count('archive_opens', distinct=True),
+    ))
     for p in players:
         p.sync_cells = [
             {'key': key, 'title': engine.PARAM_TITLES[key], 'value': p.get_sync(key),
              'mode': engine.mode_of(p.sync_values(), key)}
             for key in engine.PARAMS
         ]
+    flights = [{'flight': f, 'players': [p for p in players if p.flight_id == f.pk]}
+               for f in game.flights.all()]
     return render(request, 'ls/master_game.html', {
         'game': game,
         'players': players,
+        'flights': flights,
+        'dark_entries': game.dark_entries.prefetch_related('players')[:DARK_LIMIT],
         'minutes': format_minutes(game.game_minutes()),
         'offset_minutes': game.clock_offset_seconds // 60,
     })
@@ -419,6 +457,15 @@ def master_action(request, game_id):
             delta = 0
         game.clock_offset_seconds += delta
         game.save(update_fields=['clock_offset_seconds'])
+    elif op == 'dark':
+        ids = [int(i) for i in request.POST.getlist('players') if i.isdigit()]
+        chosen = list(game.players.filter(pk__in=ids))
+        if not chosen:
+            messages.error(request, 'Никто не отмечен.')
+        else:
+            entry = services.issue_tokens(game, chosen)
+            messages.success(request, 'В темноту: ' + ', '.join(p.callsign for p in chosen)
+                             + f'. Выдано жетонов: {entry.tokens.count()}.')
     else:
         player = get_object_or_404(Player, pk=request.POST.get('player', 0), game=game)
         anchor = f'#p{player.pk}'
@@ -440,32 +487,36 @@ def master_action(request, game_id):
     return redirect(reverse('ls:master_game', args=[game.pk]) + anchor)
 
 
+TOKEN_STATE_LABELS = {
+    'waiting': 'ждёт',
+    'matched': 'совпал',
+    'burned': 'сгорел',
+    'expired': 'просрочен',
+}
+
+
 @staff_member_required
 def master_player(request, game_id, player_id):
     game = get_object_or_404(Game, pk=game_id)
     player = get_object_or_404(Player.objects.select_related('flight'), pk=player_id, game=game)
+    now = timezone.now()
+    entries = {e.code: e for e in get_content(game.content_name).archive}
+    issued = [
+        {'token': t, 'state': TOKEN_STATE_LABELS[t.state(now)]}
+        for t in player.tokens_issued.select_related('used_by')
+    ]
+    opens = [
+        {'code': o.code, 'title': entries[o.code].title if o.code in entries else '?',
+         'via': o.get_via_display(), 'created_at': o.created_at}
+        for o in player.archive_opens.all()
+    ]
     return render(request, 'ls/master_player.html', {
         'game': game,
         'player': player,
         'attempts': player.attempts.all()[:200],
         'purchases': player.purchases.all(),
-        'tokens_used': player.tokens_used.all(),
+        'tokens_issued': issued,
+        'tokens_used': player.tokens_used.select_related('issued_to'),
+        'archive_opens': opens,
         'titles': engine.PARAM_TITLES,
-    })
-
-
-@staff_member_required
-def master_tokens(request, game_id):
-    game = get_object_or_404(Game, pk=game_id)
-    content = get_content(game.content_name)
-    tokens_all = list(game.tokens.select_related('used_by'))
-    groups = [
-        {'key': key, 'name': name, 'tokens': [t for t in tokens_all if t.symbol == key]}
-        for key, name in content.symbols.items()
-    ]
-    return render(request, 'ls/master_tokens.html', {
-        'game': game,
-        'groups': groups,
-        'used_count': sum(1 for t in tokens_all if t.used_by_id),
-        'total': len(tokens_all),
     })

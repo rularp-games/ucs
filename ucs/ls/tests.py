@@ -13,11 +13,11 @@ from django.utils import timezone
 
 from . import engine, services
 from .loader import ContentError, get_content, parse_content
-from .models import Game, Player, Purchase, RadioMessage, TaskAttempt, Token
+from .models import ArchiveOpen, DarkEntry, Game, Player, Purchase, RadioMessage, TaskAttempt, Token
 
 
 def make_game(flights: int = 1, started_minutes_ago: float | None = None) -> Game:
-    game = services.create_game('Тест', 'TEST', 'game', flights, rng=random.Random(1))
+    game = services.create_game('Тест', 'TEST', 'game', flights)
     if started_minutes_ago is not None:
         game.started_at = timezone.now() - timedelta(minutes=started_minutes_ago)
         game.save()
@@ -31,6 +31,22 @@ def login(client, game: Game, player: Player) -> None:
 
 def first_player(game: Game, is_imp: bool = False) -> Player:
     return game.players.filter(is_imp=is_imp).order_by('id').first()
+
+
+def player_by(game: Game, callsign: str) -> Player:
+    return game.players.get(callsign=callsign)
+
+
+def give_token(game: Game, owner: Player, symbol: str, code: str, minutes_ago: float = 0) -> Token:
+    """Жетон, выданный игроку `owner` `minutes_ago` минут назад."""
+    return Token.objects.create(game=game, code=code, symbol=symbol, issued_to=owner,
+                                issued_at=timezone.now() - timedelta(minutes=minutes_ago))
+
+
+def load_yaml() -> dict:
+    import yaml
+    from .loader import DATA_DIR
+    return yaml.safe_load((DATA_DIR / 'game.yaml').read_text(encoding='utf-8'))
 
 
 # --- Движок: цепочка и уровни -----------------------------------------------
@@ -206,12 +222,22 @@ class FireModelTests(SimpleTestCase):
 
 
 class TokenCodeTests(SimpleTestCase):
-    def test_codes_are_unique_and_unambiguous(self):
+    def test_codes_are_unique_four_digits(self):
         codes = engine.generate_codes(random.Random(2), 500)
         self.assertEqual(len(set(codes)), 500)
         for code in codes:
-            self.assertEqual(len(code), 4)
-            self.assertFalse(set(code) & set('01OIl'))
+            self.assertRegex(code, r'^\d{4}$')
+
+    def test_taken_codes_are_skipped(self):
+        taken = {f'{n:04d}' for n in range(9990)}
+        codes = engine.generate_codes(random.Random(3), 10, taken)
+        self.assertEqual(sorted(codes), [f'{n:04d}' for n in range(9990, 10000)])
+        with self.assertRaises(ValueError):
+            engine.generate_codes(random.Random(3), 1, taken | set(codes))
+
+    def test_parse_codes(self):
+        self.assertEqual(engine.parse_codes('1407, 0312  5521,'), ['1407', '0312', '5521'])
+        self.assertEqual(engine.parse_codes('  '), [])
 
 
 # --- Контент ----------------------------------------------------------------
@@ -220,13 +246,42 @@ class ContentTests(SimpleTestCase):
     def test_default_content_loads(self):
         content = get_content('game')
         self.assertEqual(len(content.program), 8)
-        self.assertEqual(len(content.characters), 6)
-        self.assertEqual(sum(c.is_imp for c in content.characters), 1)
+        self.assertEqual(len(content.flights), 3)
+        self.assertEqual(len(content.characters), 15)
+        self.assertEqual([len(f.characters) for f in content.flights], [5, 5, 5])
+        self.assertEqual([f.name for f in content.flights], ['Звено 1', 'Звено 2', 'Звено 3'])
+        for flight in content.flights:
+            self.assertEqual(sum(c.is_imp for c in flight.characters), 1)
+            self.assertEqual(len({c.symbol for c in flight.characters}), 5)
+        self.assertEqual(len({c.callsign for c in content.characters}), 15)
         self.assertEqual([p.not_before for p in content.program], [25, 35, 45, 55, 60, 70, 85, 100])
+
+    def test_memory_structure_is_kept(self):
+        for c in get_content('game').characters:
+            self.assertEqual([p.not_before for p in c.memory], [None, 25, 25, None, 70, 100])
+            self.assertEqual(c.memory[3].requires_param_open, 'parts')
 
     def test_every_character_has_three_dossier_cards(self):
         for c in get_content('game').characters:
             self.assertEqual(set(c.dossier), {'life', 'death', 'arrival'})
+
+    def test_personal_codes_in_stubs(self):
+        content = get_content('game')
+        expected = {
+            'Один-Один': ['4102', '4200'], 'Семь-Три': ['1407'], 'Два-Два': ['0312'],
+            'Девять-Один': ['1455'], 'Четыре-Ноль': ['2263'],
+            'Три-Три': ['3108', '3300'], 'Шесть-Пять': ['0312'], 'Восемь-Восемь': ['5521'],
+            'Ноль-Семь': ['3108'], 'Пять-Один': ['0904'],
+            'Девять-Девять': ['4511'], 'Два-Семь': ['1407'], 'Шесть-Ноль': ['7712'],
+            'Один-Четыре': ['0417'], 'Восемь-Три': ['1455', '7203'],
+        }
+        for c in content.characters:
+            codes = expected[c.callsign]
+            if c.is_imp:
+                self.assertTrue(all(code in c.memory[0].text for code in codes), c.callsign)
+            else:
+                self.assertTrue(all(code in c.memory[1].text for code in codes), c.callsign)
+                self.assertTrue(all(code in c.dossier['life'] for code in codes), c.callsign)
 
     def test_dossier_has_no_callsigns(self):
         content = get_content('game')
@@ -236,27 +291,84 @@ class ContentTests(SimpleTestCase):
                 for callsign in callsigns:
                     self.assertNotIn(callsign, text.casefold())
 
+    def test_archive_has_21_entries_verbatim(self):
+        import pathlib
+        content = get_content('game')
+        self.assertEqual(len(content.archive), 21)
+        self.assertEqual(len({e.code for e in content.archive}), 21)
+        self.assertEqual(sorted(e.queue for e in content.archive if e.queue), list(range(1, 11)))
+        self.assertEqual([e.code for e in content.archive_queue][:3], ['6060', '3108', '7203'])
+        self.assertEqual(content.archive_entry('1407').kind, 'История')
+        self.assertIsNone(content.archive_entry('0000'))
+        source = pathlib.Path('/home/duckhawk/git/larp/lost-satellites/lore/archive.md')
+        if source.is_file():
+            md = source.read_text(encoding='utf-8')
+            for e in content.archive:
+                self.assertIn(f'### {e.code} · {e.title}\n\n{e.text}', md)
+        long = content.archive_entry('2207').text
+        self.assertIn('\n— Читала.', long)
+
     def test_loader_rejects_short_program(self):
-        import yaml
-        from .loader import DATA_DIR
-        data = yaml.safe_load((DATA_DIR / 'game.yaml').read_text(encoding='utf-8'))
+        data = load_yaml()
         data['program'] = data['program'][:7]
         with self.assertRaises(ContentError):
             parse_content(data)
 
     def test_loader_rejects_decreasing_times(self):
-        import yaml
-        from .loader import DATA_DIR
-        data = yaml.safe_load((DATA_DIR / 'game.yaml').read_text(encoding='utf-8'))
+        data = load_yaml()
         data['program'][3]['not_before'] = 1
         with self.assertRaises(ContentError):
             parse_content(data)
 
     def test_loader_rejects_missing_dossier(self):
-        import yaml
-        from .loader import DATA_DIR
-        data = yaml.safe_load((DATA_DIR / 'game.yaml').read_text(encoding='utf-8'))
-        del data['flight_template']['characters'][0]['dossier']['death']
+        data = load_yaml()
+        del data['flights'][0]['characters'][0]['dossier']['death']
+        with self.assertRaises(ContentError):
+            parse_content(data)
+
+    def test_loader_rejects_duplicate_callsign(self):
+        data = load_yaml()
+        data['flights'][1]['characters'][0]['callsign'] = data['flights'][0]['characters'][0]['callsign']
+        with self.assertRaises(ContentError):
+            parse_content(data)
+
+    def test_loader_rejects_repeated_symbol_in_flight(self):
+        data = load_yaml()
+        chars = data['flights'][0]['characters']
+        chars[1]['symbol'] = chars[0]['symbol']
+        with self.assertRaises(ContentError):
+            parse_content(data)
+
+    def test_loader_requires_one_imp_per_flight(self):
+        data = load_yaml()
+        data['flights'][2]['characters'][1]['is_imp'] = True
+        with self.assertRaises(ContentError):
+            parse_content(data)
+        data = load_yaml()
+        data['flights'][2]['characters'][0]['is_imp'] = False
+        with self.assertRaises(ContentError):
+            parse_content(data)
+
+    def test_loader_rejects_bad_archive_codes(self):
+        for bad in ('140', '14070', '14a7', 1407):
+            data = load_yaml()
+            data['archive'][0]['code'] = bad
+            with self.assertRaises(ContentError, msg=bad):
+                parse_content(data)
+
+    def test_loader_rejects_duplicate_archive_code_and_queue(self):
+        data = load_yaml()
+        data['archive'][1]['code'] = data['archive'][0]['code']
+        with self.assertRaises(ContentError):
+            parse_content(data)
+        data = load_yaml()
+        data['archive'][1]['queue'] = data['archive'][0]['queue']
+        with self.assertRaises(ContentError):
+            parse_content(data)
+
+    def test_loader_rejects_bad_archive_kind(self):
+        data = load_yaml()
+        data['archive'][0]['kind'] = 'Сказка'
         with self.assertRaises(ContentError):
             parse_content(data)
 
@@ -436,71 +548,345 @@ class ModelFlowTests(TestCase):
 
 # --- Жетоны -----------------------------------------------------------------
 
+class DarkTests(TestCase):
+    def setUp(self):
+        self.game = make_game(flights=2)
+
+    def test_issue_tokens_to_group(self):
+        group = list(self.game.players.all()[:3]) + [self.game.players.order_by('-id').first()]
+        entry = services.issue_tokens(self.game, group, rng=random.Random(5))
+        self.assertEqual(entry.players.count(), 4)
+        self.assertEqual(entry.tokens.count(), 8)
+        archive_codes = {e.code for e in get_content('game').archive}
+        symbols = set(get_content('game').symbols)
+        for player in group:
+            tokens = list(player.tokens_issued.all())
+            self.assertEqual(len(tokens), 2)
+            for t in tokens:
+                self.assertRegex(t.code, r'^\d{4}$')
+                self.assertNotIn(t.code, archive_codes)
+                self.assertIn(t.symbol, symbols)
+                self.assertEqual(t.dark_entry, entry)
+        self.assertEqual(len({t.code for t in self.game.tokens.all()}), 8)
+
+    def test_second_group_gets_new_unique_codes(self):
+        players = list(self.game.players.all())
+        services.issue_tokens(self.game, players[:5])
+        services.issue_tokens(self.game, players[5:])
+        self.assertEqual(self.game.tokens.count(), 20)
+        self.assertEqual(len({t.code for t in self.game.tokens.all()}), 20)
+        self.assertEqual(self.game.dark_entries.count(), 2)
+
+    def test_game_has_no_pregenerated_tokens(self):
+        self.assertEqual(self.game.tokens.count(), 0)
+
+    def test_master_sends_group_to_dark(self):
+        staff = get_user_model().objects.create_user('master', password='x', is_staff=True)
+        self.client.force_login(staff)
+        ids = [p.pk for p in self.game.players.all()[:3]]
+        response = self.client.post(reverse('ls:master_action', args=[self.game.pk]), {'op': 'dark', 'players': ids})
+        self.assertRedirects(response, reverse('ls:master_game', args=[self.game.pk]))
+        entry = DarkEntry.objects.get()
+        self.assertEqual(sorted(entry.players.values_list('pk', flat=True)), sorted(ids))
+        self.assertEqual(self.game.tokens.count(), 6)
+        page = self.client.get(reverse('ls:master_game', args=[self.game.pk]))
+        for p in entry.players.all():
+            self.assertContains(page, p.callsign)
+
+    def test_master_dark_needs_players(self):
+        staff = get_user_model().objects.create_user('master', password='x', is_staff=True)
+        self.client.force_login(staff)
+        self.client.post(reverse('ls:master_action', args=[self.game.pk]), {'op': 'dark'})
+        self.assertFalse(DarkEntry.objects.exists())
+
+    def test_master_cannot_send_player_of_another_game(self):
+        staff = get_user_model().objects.create_user('master', password='x', is_staff=True)
+        self.client.force_login(staff)
+        other = services.create_game('Другая', 'OTHER', 'game', 1)
+        self.client.post(reverse('ls:master_action', args=[self.game.pk]),
+                         {'op': 'dark', 'players': [first_player(other).pk]})
+        self.assertFalse(DarkEntry.objects.exists())
+
+    def test_player_sees_fresh_tokens_on_post_and_codes(self):
+        player = first_player(self.game)
+        token = give_token(self.game, player, 'cross', '4321', minutes_ago=5)
+        old = give_token(self.game, player, 'star', '8765', minutes_ago=21)
+        login(self.client, self.game, player)
+        for name in ('ls:post', 'ls:codes'):
+            response = self.client.get(reverse(name))
+            self.assertContains(response, 'Потеряно соединение со спутниками')
+            self.assertContains(response, token.code)
+            self.assertNotContains(response, old.code)
+        self.assertContains(self.client.get(reverse('ls:post')), 'location.reload')
+
+    def test_banner_disappears_when_token_used_or_expired(self):
+        player = first_player(self.game)
+        other = self.game.players.exclude(pk=player.pk).first()
+        give_token(self.game, player, 'cross', '4321', minutes_ago=5)
+        login(self.client, self.game, player)
+        services.redeem_codes(other, '4321')
+        self.assertNotContains(self.client.get(reverse('ls:post')), 'Потеряно соединение')
+        Token.objects.all().delete()
+        give_token(self.game, player, 'cross', '4322', minutes_ago=20)
+        self.assertNotContains(self.client.get(reverse('ls:post')), '4322')
+
+    def test_banner_absent_without_tokens(self):
+        login(self.client, self.game, first_player(self.game))
+        self.assertNotContains(self.client.get(reverse('ls:post')), 'Потеряно соединение')
+
+
 class TokenTests(TestCase):
     def setUp(self):
         self.game = make_game()
-        self.player = first_player(self.game)
-        self.other_symbol = next(s for s, _ in Token._meta.get_field('symbol').choices if s != self.player.symbol)
+        self.player = player_by(self.game, 'Семь-Три')         # квадрат
+        self.giver = player_by(self.game, 'Два-Два')           # треугольник
+        self.other_symbol = 'cross'
 
-    def token(self, symbol):
-        return Token.objects.filter(game=self.game, symbol=symbol, used_by=None).first()
+    def redeem(self, code, player=None):
+        return services.redeem_codes(player or self.player, code)[0]
 
     def test_match_gives_card(self):
-        token = self.token(self.player.symbol)
-        outcome = services.redeem_codes(self.player, token.code)[0]
+        token = give_token(self.game, self.giver, 'square', '4321')
+        outcome = self.redeem('4321')
         self.assertTrue(outcome.ok)
+        self.assertIn('совпадение', outcome.message)
         self.player.refresh_from_db()
         token.refresh_from_db()
         self.assertEqual(self.player.cards, 1)
         self.assertEqual(token.used_by, self.player)
+        self.assertIsNotNone(token.used_at)
+        self.assertFalse(token.burned)
+        self.assertEqual(token.state(), 'matched')
 
-    def test_mismatch_burns_code(self):
-        token = self.token(self.other_symbol)
-        outcome = services.redeem_codes(self.player, token.code)[0]
-        self.assertIn('не ваш символ', outcome.message)
+    def test_mismatch_burns_token(self):
+        token = give_token(self.game, self.giver, self.other_symbol, '4321')
+        outcome = self.redeem('4321')
+        self.assertIn('Жетон сгорел', outcome.message)
         self.player.refresh_from_db()
         token.refresh_from_db()
         self.assertEqual(self.player.cards, 0)
         self.assertEqual(token.used_by, self.player)
+        self.assertTrue(token.burned)
+        self.assertEqual(token.state(), 'burned')
 
-    def test_repeat_is_rejected(self):
-        token = self.token(self.player.symbol)
-        services.redeem_codes(self.player, token.code)
-        outcome = services.redeem_codes(self.player, token.code.lower())[0]
-        self.assertIn('уже использован', outcome.message)
+    def test_own_token_is_not_counted(self):
+        token = give_token(self.game, self.player, 'square', '4321')
+        outcome = self.redeem('4321')
+        self.assertEqual(outcome.message, '4321: это ваш жетон. Его надо отдать.')
+        self.player.refresh_from_db()
+        token.refresh_from_db()
+        self.assertEqual(self.player.cards, 0)
+        self.assertIsNone(token.used_by)
+        self.assertEqual(self.player.wrong_codes, 0)
+        # жетон по-прежнему можно отдать другому
+        other = player_by(self.game, 'Девять-Один')
+        give_token(self.game, self.giver, 'star', '4322')
+        self.assertTrue(self.redeem('4322', other).ok)
+
+    def test_own_token_does_not_reset_wrong_counter(self):
+        give_token(self.game, self.player, 'square', '4321')
+        for code in ('1111', '2222'):
+            self.redeem(code)
+        self.redeem('4321')
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wrong_codes, 2)
+
+    def test_repeat_is_invalid(self):
+        give_token(self.game, self.giver, 'square', '4321')
+        self.redeem('4321')
+        outcome = self.redeem('4321')
+        self.assertIn('уже недействителен', outcome.message)
         self.player.refresh_from_db()
         self.assertEqual(self.player.cards, 1)
+        self.assertEqual(self.player.wrong_codes, 0)
 
     def test_other_player_cannot_reuse(self):
-        token = self.token(self.player.symbol)
-        services.redeem_codes(self.player, token.code)
-        other = self.game.players.exclude(pk=self.player.pk).get(symbol=self.player.symbol, is_imp=True)
-        outcome = services.redeem_codes(other, token.code)[0]
-        self.assertIn('уже использован', outcome.message)
+        give_token(self.game, self.giver, 'cross', '4321')
+        self.redeem('4321')
+        other = player_by(self.game, 'Четыре-Ноль')
+        self.assertIn('уже недействителен', self.redeem('4321', other).message)
+        other.refresh_from_db()
+        self.assertEqual(other.cards, 0)
+
+    def test_expired_token_is_invalid(self):
+        token = give_token(self.game, self.giver, 'square', '4321', minutes_ago=20.5)
+        outcome = self.redeem('4321')
+        self.assertIn('уже недействителен', outcome.message)
+        self.player.refresh_from_db()
+        token.refresh_from_db()
+        self.assertEqual(self.player.cards, 0)
+        self.assertIsNone(token.used_by)
+        self.assertEqual(token.state(), 'expired')
+
+    def test_token_just_inside_ttl_is_valid(self):
+        give_token(self.game, self.giver, 'square', '4321', minutes_ago=19.5)
+        self.assertTrue(self.redeem('4321').ok)
 
     def test_unknown_code(self):
-        outcome = services.redeem_codes(self.player, 'ZZZZ')[0]
-        self.assertIn('неизвестный код', outcome.message)
+        outcome = self.redeem('9999')
+        self.assertIn('неверный код', outcome.message)
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wrong_codes, 1)
 
-    def test_token_from_another_game_is_unknown(self):
-        other_game = services.create_game('Другая', 'OTHER', 'game', 1, rng=random.Random(99))
-        foreign = Token.objects.filter(game=other_game).exclude(code__in=self.game.tokens.values('code')).first()
-        outcome = services.redeem_codes(self.player, foreign.code)[0]
-        self.assertIn('неизвестный код', outcome.message)
+    def test_malformed_code_is_wrong(self):
+        self.assertIn('неверный код', self.redeem('ZZZZ').message)
+
+    def test_token_from_another_game_is_wrong(self):
+        other_game = services.create_game('Другая', 'OTHER', 'game', 1)
+        give_token(other_game, first_player(other_game), 'square', '4321')
+        self.assertIn('неверный код', self.redeem('4321').message)
 
     def test_several_codes_in_one_input(self):
-        own = self.game.tokens.filter(symbol=self.player.symbol, used_by=None)[:2]
-        outcomes = services.redeem_codes(self.player, f'{own[0].code} {own[1].code} ZZZZ')
+        give_token(self.game, self.giver, 'square', '4321')
+        give_token(self.game, self.giver, 'square', '4322')
+        outcomes = services.redeem_codes(self.player, '4321, 4322 9999')
         self.assertEqual([o.level for o in outcomes], ['ok', 'ok', 'bad'])
         self.player.refresh_from_db()
         self.assertEqual(self.player.cards, 2)
 
-    def test_tokens_page(self):
+    def test_codes_page(self):
         login(self.client, self.game, self.player)
-        token = self.token(self.player.symbol)
-        response = self.client.post(reverse('ls:tokens'), {'codes': token.code}, follow=True)
+        give_token(self.game, self.giver, 'square', '4321')
+        response = self.client.post(reverse('ls:codes'), {'codes': '4321'}, follow=True)
         self.assertContains(response, 'совпадение')
         self.assertContains(response, 'Ваш символ')
+
+    def test_old_tokens_url_is_gone(self):
+        login(self.client, self.game, self.player)
+        self.assertEqual(self.client.get('/ls/post/tokens/').status_code, 404)
+        self.assertContains(self.client.get(reverse('ls:post')), reverse('ls:codes'))
+
+
+class ArchiveCodeTests(TestCase):
+    def setUp(self):
+        self.game = make_game(started_minutes_ago=30)
+        self.player = player_by(self.game, 'Семь-Три')
+
+    def test_open_code_opens_entry(self):
+        outcome = services.redeem_codes(self.player, '6060')[0]
+        entry = get_content('game').archive_entry('6060')
+        self.assertTrue(outcome.ok)
+        self.assertIn(entry.text, outcome.payload)
+        self.assertIn(entry.title, outcome.payload)
+        opened = ArchiveOpen.objects.get()
+        self.assertEqual((opened.player, opened.code, opened.via), (self.player, '6060', 'code'))
+
+    def test_repeat_shows_text_again(self):
+        services.redeem_codes(self.player, '6060')
+        outcome = services.redeem_codes(self.player, '6060')[0]
+        self.assertTrue(outcome.ok)
+        self.assertIn(get_content('game').archive_entry('6060').text, outcome.payload)
+        self.assertEqual(ArchiveOpen.objects.count(), 1)
+
+    def test_locked_entry_is_unavailable(self):
+        outcome = services.redeem_codes(self.player, '1407')[0]      # замок 70
+        self.assertEqual(outcome.message, '1407: запись недоступна. Повторите позже.')
+        self.assertEqual(outcome.payload, '')
+        self.assertFalse(ArchiveOpen.objects.exists())
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wrong_codes, 0)
+
+    def test_entry_opens_after_clock_shift(self):
+        services.redeem_codes(self.player, '1407')
+        self.game.clock_offset_seconds = 40 * 60
+        self.game.save()
+        self.player.refresh_from_db()
+        self.assertTrue(services.redeem_codes(self.player, '1407')[0].ok)
+        self.assertEqual(ArchiveOpen.objects.get().code, '1407')
+
+    def test_before_start_all_locked(self):
+        self.game.started_at = None
+        self.game.save()
+        self.player.refresh_from_db()
+        self.assertIn('недоступна', services.redeem_codes(self.player, '6060')[0].message)
+
+    def test_code_is_shared_between_players(self):
+        other = player_by(self.game, 'Девять-Один')
+        services.redeem_codes(self.player, '6060')
+        self.assertTrue(services.redeem_codes(other, '6060')[0].ok)
+        self.assertEqual(ArchiveOpen.objects.count(), 2)
+
+    def test_payload_page_shows_text_with_line_breaks(self):
+        login(self.client, self.game, self.player)
+        response = self.client.post(reverse('ls:codes'), {'codes': '6060'}, follow=True)
+        self.assertContains(response, 'Институт дальних экспедиций')
+        self.assertContains(response, '<li class="payload')
+
+    def test_known_page_lists_archive_in_opening_order(self):
+        login(self.client, self.game, self.player)
+        ArchiveOpen.objects.create(player=self.player, code='3108', via='code',
+                                   created_at=timezone.now() - timedelta(minutes=2))
+        ArchiveOpen.objects.create(player=self.player, code='6060', via='card',
+                                   created_at=timezone.now() - timedelta(minutes=1))
+        html = self.client.get(reverse('ls:known')).content.decode()
+        self.assertLess(html.index('3108 · Транспорт'), html.index('6060 · Основание'))
+        self.assertIn('Из сводки потерь войны за пояс', html)
+        ArchiveOpen.objects.create(player=self.player, code='2207', via='code')
+        html = self.client.get(reverse('ls:known')).content.decode()
+        self.assertIn('<br>— Читала.', html)
+
+
+class WrongCodeTests(TestCase):
+    def setUp(self):
+        self.game = make_game(started_minutes_ago=40)
+        self.player = player_by(self.game, 'Семь-Три')
+        self.now = timezone.now()
+
+    def wrong(self, n, now=None):
+        return [services.redeem_codes(self.player, f'80{i:02d}', now=now or self.now)[0] for i in range(n)]
+
+    def test_five_wrong_codes_block_for_two_minutes(self):
+        outcomes = self.wrong(5)
+        self.assertIn('Поле закрыто на 2 мин', outcomes[-1].message)
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.codes_blocked_until, self.now + timedelta(minutes=2))
+        outcome = services.redeem_codes(self.player, '6060', now=self.now + timedelta(seconds=30))[0]
+        self.assertIn('Поле закрыто. Подождите', outcome.message)
+        self.assertFalse(ArchiveOpen.objects.exists())
+
+    def test_four_wrong_codes_do_not_block(self):
+        self.wrong(4)
+        self.assertTrue(services.redeem_codes(self.player, '6060', now=self.now)[0].ok)
+
+    def test_block_ends(self):
+        self.wrong(5)
+        later = self.now + timedelta(minutes=2, seconds=1)
+        self.assertTrue(services.redeem_codes(self.player, '6060', now=later)[0].ok)
+
+    def test_right_code_resets_counter(self):
+        self.wrong(4)
+        services.redeem_codes(self.player, '6060', now=self.now)
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wrong_codes, 0)
+        self.wrong(4)
+        self.assertTrue(services.redeem_codes(self.player, '3108', now=self.now)[0].ok)
+
+    def test_matching_token_resets_counter(self):
+        self.wrong(4)
+        give_token(self.game, player_by(self.game, 'Два-Два'), 'square', '4321')
+        services.redeem_codes(self.player, '4321')
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wrong_codes, 0)
+
+    def test_locked_archive_code_does_not_reset_counter(self):
+        self.wrong(4)
+        services.redeem_codes(self.player, '1407', now=self.now)
+        self.player.refresh_from_db()
+        self.assertEqual(self.player.wrong_codes, 4)
+
+    def test_rest_of_list_is_blocked_after_fifth(self):
+        outcomes = services.redeem_codes(self.player, '8001 8002 8003 8004 8005 6060', now=self.now)
+        self.assertEqual(len(outcomes), 6)
+        self.assertIn('Поле закрыто. Подождите', outcomes[-1].message)
+        self.assertFalse(ArchiveOpen.objects.exists())
+
+    def test_codes_page_tells_how_long_to_wait(self):
+        login(self.client, self.game, self.player)
+        for i in range(5):
+            self.client.post(reverse('ls:codes'), {'codes': f'80{i:02d}'})
+        response = self.client.get(reverse('ls:codes'))
+        self.assertContains(response, 'Поле закрыто. Подождите')
+        self.assertContains(response, 'disabled')
 
 
 # --- Карты ------------------------------------------------------------------
@@ -581,32 +967,46 @@ class CardTests(TestCase):
         self.player.save()
         self.game.started_at = timezone.now() - timedelta(minutes=200)
         self.game.save()
-        for _ in range(18):
+        for _ in range(15):
             self.assertTrue(services.buy(self.player, 'flight').ok)
         order = self.reload().dossier_order
-        self.assertEqual(len(order), 18)
+        self.assertEqual(len(order), 15)
         parts = [part for _, part in order]
-        self.assertEqual(parts, ['life'] * 6 + ['death'] * 6 + ['arrival'] * 6)
+        self.assertEqual(parts, ['life'] * 5 + ['death'] * 5 + ['arrival'] * 5)
         for part in ('life', 'death', 'arrival'):
-            self.assertEqual(len({cid for cid, p in order if p == part}), 6)
+            self.assertEqual(len({cid for cid, p in order if p == part}), 5)
         self.assertIn('Все карточки', services.buy(self.player, 'flight').message)
-        self.assertEqual(self.reload().cards, 30 - 18)
+        self.assertEqual(self.reload().cards, 30 - 15)
+
+    def test_dossier_covers_only_own_flight(self):
+        content = get_content('game')
+        game = services.create_game('Три звена', 'THREE', 'game', 3)
+        game.started_at = timezone.now() - timedelta(minutes=200)
+        game.save()
+        for player in game.players.all():
+            player.cards = 15
+            player.save()
+            for _ in range(15):
+                services.buy(player, 'flight')
+            player.refresh_from_db()
+            own = {c.id for c in content.flight_characters(player.character_id)}
+            self.assertEqual({cid for cid, _ in player.dossier_order}, own, player.callsign)
 
     def test_dossier_locks_death_and_arrival(self):
         self.player.cards = 30
         self.player.save()
         self.game.started_at = timezone.now() - timedelta(minutes=60)
         self.game.save()
-        for _ in range(6):
+        for _ in range(5):
             self.assertTrue(services.buy(self.player, 'flight').ok)
         self.assertIn('Пока нет', services.buy(self.player, 'flight').message)
         self.game.clock_offset_seconds = 10 * 60
         self.game.save()
         self.player.refresh_from_db()
-        for _ in range(6):
+        for _ in range(5):
             self.assertTrue(services.buy(self.player, 'flight').ok)
         self.assertIn('Пока нет', services.buy(self.player, 'flight').message)
-        self.assertEqual(self.reload().cards, 30 - 12)
+        self.assertEqual(self.reload().cards, 30 - 10)
 
     def test_dossier_cards_do_not_name_callsigns(self):
         self.player.cards = 30
@@ -614,7 +1014,7 @@ class CardTests(TestCase):
         self.game.started_at = timezone.now() - timedelta(minutes=200)
         self.game.save()
         callsigns = [c.callsign.casefold() for c in get_content('game').characters]
-        for _ in range(18):
+        for _ in range(15):
             payload = services.buy(self.player, 'flight').payload.casefold()
             self.assertFalse(any(cs in payload for cs in callsigns))
 
@@ -652,8 +1052,72 @@ class CardTests(TestCase):
     def test_cards_page_buttons(self):
         login(self.client, self.game, self.player)
         response = self.client.get(reverse('ls:cards'))
-        for title in ('О себе', 'О звене', 'О программе', 'Рация'):
+        for title in ('О себе', 'О звене', 'О программе', 'Архив', 'Рация'):
             self.assertContains(response, title)
+        html = response.content.decode()
+        self.assertLess(html.index('О программе'), html.index('Архив'))
+        self.assertLess(html.index('Архив'), html.index('Рация'))
+
+    def test_archive_card_follows_queue(self):
+        self.game.started_at = timezone.now() - timedelta(minutes=200)
+        self.game.save()
+        queue = get_content('game').archive_queue
+        for entry in queue[:3]:
+            outcome = services.buy(self.player, 'archive')
+            self.assertTrue(outcome.ok)
+            self.assertIn(entry.text, outcome.payload)
+        self.assertEqual(list(self.player.archive_opens.values_list('code', 'via')),
+                         [(e.code, 'card') for e in queue[:3]])
+        self.assertEqual(self.reload().cards, 7)
+
+    def test_archive_card_goes_to_journal(self):
+        self.game.started_at = timezone.now() - timedelta(minutes=200)
+        self.game.save()
+        services.buy(self.player, 'archive')
+        purchase = Purchase.objects.get()
+        self.assertEqual(purchase.kind, 'archive')
+        self.assertIn('6060', purchase.payload)
+
+    def test_archive_card_skips_entry_opened_by_code(self):
+        self.game.started_at = timezone.now() - timedelta(minutes=200)
+        self.game.save()
+        services.redeem_codes(self.player, '6060')
+        outcome = services.buy(self.player, 'archive')
+        self.assertIn(get_content('game').archive_queue[1].text, outcome.payload)
+        self.assertEqual(self.player.archive_opens.count(), 2)
+
+    def test_code_after_card_does_not_duplicate(self):
+        self.game.started_at = timezone.now() - timedelta(minutes=200)
+        self.game.save()
+        services.buy(self.player, 'archive')
+        self.assertTrue(services.redeem_codes(self.player, '6060')[0].ok)
+        self.assertEqual(self.player.archive_opens.count(), 1)
+
+    def test_archive_card_locked_does_not_spend(self):
+        self.game.started_at = timezone.now() - timedelta(minutes=10)
+        self.game.save()
+        outcome = services.buy(self.player, 'archive')
+        self.assertIn('Пока нет', outcome.message)
+        self.assertEqual(self.reload().cards, 10)
+        self.assertFalse(self.player.archive_opens.exists())
+
+    def test_archive_card_before_start_is_locked(self):
+        self.assertIn('Пока нет', services.buy(self.player, 'archive').message)
+
+    def test_archive_card_when_everything_open(self):
+        self.game.started_at = timezone.now() - timedelta(minutes=200)
+        self.game.save()
+        self.player.cards = 11
+        self.player.save()
+        for _ in range(10):
+            self.assertTrue(services.buy(self.player, 'archive').ok)
+        outcome = services.buy(self.player, 'archive')
+        self.assertIn('Весь архив уже получен', outcome.message)
+        self.assertEqual(self.reload().cards, 1)
+        # записи вне очереди остаются доступны только кодом
+        self.assertEqual(self.player.archive_opens.count(), 10)
+        self.assertTrue(services.redeem_codes(self.player, '1407')[0].ok)
+        self.assertEqual(self.player.archive_opens.count(), 11)
 
 
 # --- Рация ------------------------------------------------------------------
@@ -729,27 +1193,42 @@ class MasterTests(TestCase):
     def setUp(self):
         self.staff = get_user_model().objects.create_user('master', password='x', is_staff=True)
 
-    def test_create_game_makes_players_and_tokens(self):
+    def test_create_game_makes_players(self):
         self.client.force_login(self.staff)
         response = self.client.post(reverse('ls:master_index'), {
             'title': 'Игра', 'code': 'abc', 'content': 'game', 'flights': '3',
         })
         game = Game.objects.get(code='abc')
         self.assertRedirects(response, reverse('ls:master_game', args=[game.pk]))
-        self.assertEqual(game.flights.count(), 3)
-        self.assertEqual(game.players.count(), 18)
-        self.assertEqual(game.tokens.count(), 100)
-        for symbol, _ in Token._meta.get_field('symbol').choices:
-            self.assertEqual(game.tokens.filter(symbol=symbol).count(), 20)
+        self.assertEqual([f.name for f in game.flights.all()], ['Звено 1', 'Звено 2', 'Звено 3'])
+        self.assertEqual(game.players.count(), 15)
+        self.assertEqual(game.tokens.count(), 0)
         self.assertEqual(game.players.filter(is_imp=True).count(), 3)
         callsigns = set(game.players.values_list('callsign', flat=True))
-        self.assertEqual(len(callsigns), 18)
-        self.assertIn('Семь-Три-Б', callsigns)
+        self.assertEqual(len(callsigns), 15)
+        self.assertIn('Семь-Три', callsigns)
+        self.assertIn('Восемь-Три', callsigns)
+
+    def test_flights_count_takes_first_flights_from_content(self):
+        game = make_game(2)
+        self.assertEqual(game.flights.count(), 2)
+        self.assertEqual(game.players.count(), 10)
+        self.assertFalse(game.players.filter(callsign='Девять-Девять').exists())
+
+    def test_flights_count_is_limited_by_content(self):
+        self.client.force_login(self.staff)
+        for flights in ('0', '4'):
+            self.client.post(reverse('ls:master_index'), {
+                'title': 'Игра', 'code': 'abc', 'content': 'game', 'flights': flights,
+            })
+        self.assertFalse(Game.objects.exists())
+        with self.assertRaises(ValueError):
+            services.create_game('Игра', 'abc', 'game', 4)
 
     def test_single_flight_has_plain_callsigns(self):
         game = make_game(1)
         self.assertTrue(game.players.filter(callsign='Семь-Три').exists())
-        self.assertEqual(game.players.count(), 6)
+        self.assertEqual(game.players.count(), 5)
 
     def test_duplicate_code_is_rejected(self):
         make_game()
@@ -765,7 +1244,6 @@ class MasterTests(TestCase):
         urls = [
             reverse('ls:master_index'),
             reverse('ls:master_game', args=[game.pk]),
-            reverse('ls:master_tokens', args=[game.pk]),
             reverse('ls:master_player', args=[game.pk, first_player(game).pk]),
         ]
         for client_user in (None, user):
@@ -784,10 +1262,38 @@ class MasterTests(TestCase):
         game = make_game(started_minutes_ago=3)
         self.client.force_login(self.staff)
         player = first_player(game)
+        services.issue_tokens(game, [player])
         for url in (reverse('ls:master_index'), reverse('ls:master_game', args=[game.pk]),
-                    reverse('ls:master_tokens', args=[game.pk]),
                     reverse('ls:master_player', args=[game.pk, player.pk])):
             self.assertEqual(self.client.get(url).status_code, 200, url)
+
+    def test_game_page_has_dark_block_and_archive_column(self):
+        game = make_game(2, started_minutes_ago=3)
+        player = first_player(game)
+        ArchiveOpen.objects.create(player=player, code='6060', via='code')
+        self.client.force_login(self.staff)
+        html = self.client.get(reverse('ls:master_game', args=[game.pk])).content.decode()
+        self.assertIn('В темноту', html)
+        self.assertIn('Звено 2', html)
+        self.assertIn('<th>Архив</th>', html)
+        self.assertEqual(html.count('name="players"'), 10)
+
+    def test_player_journal_lists_tokens_and_archive(self):
+        game = make_game(started_minutes_ago=30)
+        player = player_by(game, 'Семь-Три')
+        giver = player_by(game, 'Два-Два')
+        give_token(game, player, 'cross', '4321')
+        give_token(game, giver, 'square', '4322')
+        give_token(game, giver, 'star', '4323')
+        give_token(game, giver, 'star', '4324', minutes_ago=30)
+        services.redeem_codes(player, '4322 4323 6060')
+        self.client.force_login(self.staff)
+        html = self.client.get(reverse('ls:master_player', args=[game.pk, player.pk])).content.decode()
+        for text in ('Выданные жетоны', 'Введённые жетоны', '4321', '4322', '4323', 'ждёт', 'Основание', 'код'):
+            self.assertIn(text, html)
+        giver_html = self.client.get(reverse('ls:master_player', args=[game.pk, giver.pk])).content.decode()
+        for text in ('совпал', 'сгорел', 'просрочен', player.callsign):
+            self.assertIn(text, giver_html)
 
     def test_start_and_clock(self):
         game = make_game()
@@ -821,20 +1327,9 @@ class MasterTests(TestCase):
 
     def test_cannot_touch_player_of_another_game(self):
         game = make_game()
-        other = services.create_game('Другая', 'OTHER', 'game', 1, rng=random.Random(7))
+        other = services.create_game('Другая', 'OTHER', 'game', 1)
         stranger = first_player(other)
         self.client.force_login(self.staff)
         response = self.client.post(reverse('ls:master_action', args=[game.pk]),
                                     {'op': 'cards:1', 'player': stranger.pk})
         self.assertEqual(response.status_code, 404)
-
-    def test_token_sheet_marks_used(self):
-        game = make_game()
-        player = first_player(game)
-        token = game.tokens.first()
-        services.redeem_codes(player, token.code)
-        self.client.force_login(self.staff)
-        response = self.client.get(reverse('ls:master_tokens', args=[game.pk]))
-        self.assertContains(response, token.code)
-        self.assertContains(response, 'использовано 1 из 100')
-        self.assertTrue(re.search(r'tcode used', response.content.decode()))

@@ -11,7 +11,6 @@
 {% block content %}
 <div class="row">
   <h2 class="grow" style="margin:0">{{ game.title }} <span class="dim mono">{{ game.code }}</span></h2>
-  <a class="btn" href="{% url 'ls:master_tokens' game.pk %}">Лист жетонов</a>
 </div>
 <div class="panel row" style="margin-top:14px">
   <div>Игровое время: <strong class="mono" style="font-size:22px">{{ minutes }}</strong>
@@ -26,11 +25,41 @@
   <a class="btn" href="">Обновить</a>
 </div>
 
+<h2>Темнота</h2>
+<form method="post" action="{% url 'ls:master_action' game.pk %}" class="panel">
+  {% csrf_token %}
+  <input type="hidden" name="op" value="dark">
+  <div class="row" style="align-items:flex-start">
+    {% for f in flights %}
+    <div class="grow">
+      <strong>{{ f.flight.name }}</strong>
+      {% for p in f.players %}
+      <div><label><input type="checkbox" name="players" value="{{ p.pk }}"> {{ p.callsign }}{% if p.is_imp %} <span class="tag">ИМП</span>{% endif %}</label></div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  <p class="row" style="margin-bottom:0"><button class="primary">В темноту</button>
+    <span class="dim" style="font-size:13px">Каждому отмеченному выдаётся по два жетона.</span></p>
+</form>
+<div class="panel table-wrap">
+  <table>
+    <tr><th>Время</th><th>Группа</th></tr>
+    {% for d in dark_entries %}
+    <tr><td class="mono">{{ d.created_at|date:"H:i:s" }}</td>
+      <td>{% for p in d.players.all %}{{ p.callsign }}{% if not forloop.last %}, {% endif %}{% endfor %}</td></tr>
+    {% empty %}
+    <tr><td colspan="2" class="dim">В темноту пока никого не отправляли.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<h2>Игроки</h2>
 <div class="panel table-wrap">
 <table>
   <tr><th>Позывной</th><th>Звено</th><th>Символ</th>
     <th>Навигация</th><th>Движение</th><th>Части</th><th>Огонь</th>
-    <th>Карты</th><th>Рация</th><th>Покупок</th></tr>
+    <th>Карты</th><th>Рация</th><th>Покупок</th><th>Архив</th></tr>
   {% for p in players %}
   <tr id="p{{ p.pk }}">
     <td><a href="{% url 'ls:master_player' game.pk p.pk %}">{{ p.callsign }}</a>{% if p.is_imp %} <span class="tag">ИМП</span>{% endif %}</td>
@@ -61,6 +90,7 @@
       </form>
     </td>
     <td>{{ p.purchase_count }}</td>
+    <td>{{ p.archive_count }}</td>
   </tr>
   {% endfor %}
 </table>

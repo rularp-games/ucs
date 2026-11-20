@@ -393,15 +393,17 @@ def build_dossier_order(rng: random.Random, character_ids: list[str]) -> list[li
     return order
 
 
-# --- Жетоны -----------------------------------------------------------------
+# --- Жетоны и коды ----------------------------------------------------------
 
-TOKEN_ALPHABET = ''.join(ch for ch in string.ascii_uppercase + string.digits if ch not in '01OI')
+TOKEN_ALPHABET = string.digits
 TOKEN_LENGTH = 4
 
 
 def generate_codes(rng: random.Random, count: int, taken: set[str] | None = None) -> list[str]:
-    """Уникальные коды жетонов без неоднозначных символов (0, O, 1, I, l)."""
+    """Уникальные четырёхзначные коды, не входящие в `taken`."""
     taken = set(taken or ())
+    if len(taken) + count > len(TOKEN_ALPHABET) ** TOKEN_LENGTH:
+        raise ValueError('кодов не хватает')
     codes: list[str] = []
     while len(codes) < count:
         code = ''.join(rng.choice(TOKEN_ALPHABET) for _ in range(TOKEN_LENGTH))
@@ -409,3 +411,8 @@ def generate_codes(rng: random.Random, count: int, taken: set[str] | None = None
             taken.add(code)
             codes.append(code)
     return codes
+
+
+def parse_codes(raw: str) -> list[str]:
+    """Коды из строки ввода: разделители — пробел и запятая."""
+    return raw.replace(',', ' ').split()

@@ -4,17 +4,16 @@
 <h2>Игры</h2>
 <div class="panel table-wrap">
 <table>
-  <tr><th>Название</th><th>Код</th><th>Игроков</th><th>Старт</th><th></th></tr>
+  <tr><th>Название</th><th>Код</th><th>Игроков</th><th>Старт</th></tr>
   {% for g in games %}
   <tr>
     <td><a href="{% url 'ls:master_game' g.pk %}">{{ g.title }}</a></td>
     <td class="mono">{{ g.code }}</td>
     <td>{{ g.player_count }}</td>
     <td>{% if g.started_at %}{{ g.started_at|date:"d.m.Y H:i" }}{% else %}<span class="dim">нет</span>{% endif %}</td>
-    <td><a href="{% url 'ls:master_tokens' g.pk %}">жетоны</a></td>
   </tr>
   {% empty %}
-  <tr><td colspan="5" class="dim">Игр пока нет.</td></tr>
+  <tr><td colspan="4" class="dim">Игр пока нет.</td></tr>
   {% endfor %}
 </table>
 </div>
@@ -24,10 +23,10 @@
   <label class="field">Название<input type="text" name="title" required></label>
   <label class="field">Код входа<input type="text" name="code" required autocomplete="off"></label>
   <label class="field">Контент
-    <select name="content">{% for c in contents %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select>
+    <select name="content">{% for c in contents %}<option value="{{ c.name }}">{{ c.name }} (звеньев: {{ c.flights }})</option>{% endfor %}</select>
   </label>
-  <label class="field">Звеньев (1–{{ max_flights }})<input type="number" name="flights" value="1" min="1" max="{{ max_flights }}"></label>
+  <label class="field">Звеньев (сколько взять из контента, 1–{{ max_flights }})<input type="number" name="flights" value="1" min="1" max="{{ max_flights }}"></label>
   <button class="primary">Создать</button>
-  <p class="dim" style="font-size:13px;margin-bottom:0">Создаются звенья, игроки из шаблона и 100 жетонов.</p>
+  <p class="dim" style="font-size:13px;margin-bottom:0">Создаются звенья и игроки из контента. Жетоны выдаются позже, из панели игры.</p>
 </form>
 {% endblock %}

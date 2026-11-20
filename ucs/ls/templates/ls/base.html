@@ -84,7 +84,13 @@
   .msgs li.success { border-left-color: var(--ok); }
   .msgs li.warning { border-left-color: #b39a58; }
   .msgs li.error { border-left-color: var(--warn); }
-  .msgs li.payload { border-left-color: var(--accent); font-size: 17px; line-height: 1.6; padding: 16px 18px; }
+  .msgs li.payload { border-left-color: var(--accent); font-size: 17px; line-height: 1.6; padding: 16px 18px; white-space: pre-line; }
+  .dark { border-color: var(--warn); }
+  .dark h3 { font: 600 15px ui-monospace, Menlo, Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; color: #e0a3a1; margin: 0 0 12px; }
+  .dark-tokens { display: flex; gap: 14px; flex-wrap: wrap; }
+  .dtoken { flex: 1 1 180px; text-align: center; padding: 14px 10px; background: #0c121b; border: 1px dashed var(--warn); border-radius: 4px; }
+  .dtoken .num { font: 600 44px/1.1 ui-monospace, Menlo, Consolas, monospace; letter-spacing: .18em; }
+  .dtoken svg { margin-top: 6px; }
   .protocol { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
   table { border-collapse: collapse; width: 100%; font-size: 14px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
@@ -112,7 +118,7 @@
     {% block nav %}
       {% if player %}
         <a href="{% url 'ls:post' %}"{% if active == 'post' %} class="on"{% endif %}>Пост</a>
-        <a href="{% url 'ls:tokens' %}"{% if active == 'tokens' %} class="on"{% endif %}>Жетоны</a>
+        <a href="{% url 'ls:codes' %}"{% if active == 'codes' %} class="on"{% endif %}>Коды</a>
         <a href="{% url 'ls:cards' %}"{% if active == 'cards' %} class="on"{% endif %}>Карты</a>
         <a href="{% url 'ls:known' %}"{% if active == 'known' %} class="on"{% endif %}>Что я знаю</a>
         {% if has_radio %}<a href="{% url 'ls:radio' %}"{% if active == 'radio' %} class="on"{% endif %}>Эфир</a>{% endif %}

@@ -10,6 +10,13 @@
 <p class="dim">Пока ничего.</p>
 {% endfor %}
 {% endfor %}
+<h2>Архив</h2>
+{% for e in archive %}
+<div class="panel protocol"><strong>{{ e.code }} · {{ e.title }}</strong>
+  <div style="margin-top:8px">{{ e.text|linebreaks }}</div></div>
+{% empty %}
+<p class="dim">Пока ничего.</p>
+{% endfor %}
 <h2>Рация</h2>
 <div class="panel">
   {% if player.radio_level == 0 %}Рации нет.

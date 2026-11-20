@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.db import models
 from django.utils import timezone
 
@@ -20,8 +22,14 @@ PURCHASE_KINDS = [
     ('self', 'О себе'),
     ('flight', 'О звене'),
     ('program', 'О программе'),
+    ('archive', 'Архив'),
     ('radio', 'Рация'),
 ]
+ARCHIVE_VIA = [
+    ('code', 'код'),
+    ('card', 'карта'),
+]
+TOKEN_TTL = timedelta(minutes=20)  # жетон, который никто не ввёл за этот срок, сгорает
 
 
 class Game(models.Model):
@@ -81,6 +89,8 @@ class Player(models.Model):
     dossier_order = models.JSONField('порядок досье', default=list, blank=True)
     memory_index = models.PositiveSmallIntegerField(default=0)
     program_index = models.PositiveSmallIntegerField(default=0)
+    wrong_codes = models.PositiveSmallIntegerField('неверных кодов подряд', default=0)
+    codes_blocked_until = models.DateTimeField('ввод кодов закрыт до', null=True, blank=True)
 
     class Meta:
         ordering = ['flight_id', 'id']
@@ -106,23 +116,73 @@ class Player(models.Model):
         setattr(self, f'sync_{param}', value)
 
 
+class DarkEntry(models.Model):
+    """Группа, которую мастер отправил в темноту: каждому в ней выданы жетоны."""
+
+    game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name='dark_entries')
+    created_at = models.DateTimeField(default=timezone.now)
+    players = models.ManyToManyField(Player, related_name='dark_entries')
+
+    class Meta:
+        ordering = ['-created_at', '-id']
+
+
 class Token(models.Model):
-    """Жетон: код с бумажки мастера, символ жетона и кто его ввёл."""
+    """Жетон: четырёхзначный код и символ, выданный игроку в темноте.
+
+    Состояния: ждёт (не введён, срок не вышел), совпал (ввёл игрок с тем же символом),
+    сгорел (ввёл игрок с другим символом), просрочен (срок вышел, никто не ввёл).
+    """
 
     game = models.ForeignKey(Game, on_delete=models.CASCADE, related_name='tokens')
     code = models.CharField(max_length=4)
     symbol = models.CharField(max_length=16, choices=SYMBOL_CHOICES)
+    issued_to = models.ForeignKey(Player, null=True, blank=True, on_delete=models.SET_NULL, related_name='tokens_issued')
+    issued_at = models.DateTimeField(default=timezone.now)
+    dark_entry = models.ForeignKey(DarkEntry, null=True, blank=True, on_delete=models.SET_NULL, related_name='tokens')
     used_by = models.ForeignKey(Player, null=True, blank=True, on_delete=models.SET_NULL, related_name='tokens_used')
     used_at = models.DateTimeField(null=True, blank=True)
+    burned = models.BooleanField('сгорел при вводе', default=False)
 
     class Meta:
-        ordering = ['symbol', 'code']
+        ordering = ['-issued_at', '-id']
         constraints = [
             models.UniqueConstraint(fields=['game', 'code'], name='ls_unique_token_code_per_game'),
         ]
 
     def __str__(self) -> str:
         return f'{self.code} ({self.symbol})'
+
+    @property
+    def expires_at(self):
+        return self.issued_at + TOKEN_TTL
+
+    def is_expired(self, now=None) -> bool:
+        return (now or timezone.now()) >= self.expires_at
+
+    def is_valid(self, now=None) -> bool:
+        """Можно ли ещё ввести жетон: никто не вводил и срок не вышел."""
+        return self.used_by_id is None and not self.burned and not self.is_expired(now)
+
+    def state(self, now=None) -> str:
+        if self.used_by_id is not None:
+            return 'burned' if self.burned else 'matched'
+        return 'expired' if self.is_expired(now) else 'waiting'
+
+
+class ArchiveOpen(models.Model):
+    """Запись архива, открытая игроком: кодом или картой."""
+
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name='archive_opens')
+    code = models.CharField(max_length=4)
+    via = models.CharField(max_length=8, choices=ARCHIVE_VIA)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['created_at', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['player', 'code'], name='ls_unique_archive_open_per_player'),
+        ]
 
 
 class Purchase(models.Model):
