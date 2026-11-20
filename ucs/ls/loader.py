@@ -7,6 +7,7 @@ dataclass'ы, как в `sim/loader.py`.
 from __future__ import annotations
 
 import functools
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,10 +23,29 @@ PROGRAM_SIZE = 8
 PARAM_KEYS = ('nav', 'move', 'parts', 'fire')
 ARCHIVE_KINDS = ('История', 'Диалог', 'Серия А', 'Дело')
 CODE_LENGTH = 4
+GENDERS = ('m', 'f')
+GENDER_MARK = re.compile(r'\{([^{}|:]+):([^{}|]*)\|([^{}|]*)\}')
 
 
 class ContentError(Exception):
     """Контент описан некорректно."""
+
+
+def render_gender(text: str, genders: dict[str, str]) -> str:
+    """Подставить в метки `{Позывной:мужской|женский}` вариант по полу позывного.
+
+    `genders` — полный словарь `{позывной: 'm' | 'f'}`; позывной, которого в нём нет,
+    даёт `KeyError`: исходный пол из контента здесь не подставляется, это дело вызывающего.
+    """
+    return GENDER_MARK.sub(lambda m: m.group(2) if genders[m.group(1)] == 'm' else m.group(3), text)
+
+
+def check_gender_marks(text: str, callsigns: set[str], where: str) -> None:
+    """Все метки рода в тексте корректны и указывают на известные позывные."""
+    for m in GENDER_MARK.finditer(text):
+        _require(m.group(1) in callsigns, f'{where}: метка ссылается на неизвестный позывной «{m.group(1)}»')
+    rest = GENDER_MARK.sub('', text)
+    _require('{' not in rest and '}' not in rest, f'{where}: некорректная метка рода или лишняя скобка')
 
 
 @dataclass(frozen=True)
@@ -47,6 +67,8 @@ class Character:
     is_imp: bool
     memory: tuple[MemoryPack, ...]
     dossier: dict[str, str]
+    gender: str                             # исходный пол роли, 'm' или 'f'
+    names: dict[str, str]                   # полное имя по полу: {'m': ..., 'f': ...}
 
 
 @dataclass(frozen=True)
@@ -154,8 +176,14 @@ def _parse_character(item: dict, symbols: dict[str, str]) -> Character:
         _require(bool(text), f'{char_id}: нет досье «{part}»')
     memory = _parse_memory(char_id, item.get('memory') or [])
     _require(bool(memory), f'{char_id}: нет пакетов памяти')
+    gender = str(item.get('gender', ''))
+    _require(gender in GENDERS, f'{char_id}: gender должен быть m или f')
+    raw_names = item.get('names') or {}
+    names = {g: str(raw_names.get(g, '')).strip() for g in GENDERS}
+    _require(all(names.values()), f'{char_id}: names должны содержать имена m и f')
     return Character(id=char_id, callsign=str(item['callsign']), symbol=symbol,
-                     is_imp=bool(item.get('is_imp', False)), memory=memory, dossier=dossier)
+                     is_imp=bool(item.get('is_imp', False)), memory=memory, dossier=dossier,
+                     gender=gender, names=names)
 
 
 def _parse_flights(raw: list, symbols: dict[str, str]) -> tuple[FlightDef, ...]:
@@ -212,6 +240,22 @@ def _parse_archive(raw: list) -> tuple[ArchiveEntry, ...]:
     return tuple(entries)
 
 
+def _check_all_marks(flights: tuple[FlightDef, ...], program: tuple[ProgramPack, ...],
+                     archive: tuple[ArchiveEntry, ...]) -> None:
+    """Метки рода во всех текстах: память, досье, программа, архив."""
+    callsigns = {c.callsign for f in flights for c in f.characters}
+    for f in flights:
+        for c in f.characters:
+            for pack in c.memory:
+                check_gender_marks(pack.text, callsigns, f'{c.id}/{pack.id}')
+            for part, text in c.dossier.items():
+                check_gender_marks(text, callsigns, f'{c.id}/досье {part}')
+    for p in program:
+        check_gender_marks(p.text, callsigns, f'программа {p.id}')
+    for e in archive:
+        check_gender_marks(e.text, callsigns, f'архив {e.code}')
+
+
 def parse_content(data: dict, name: str = DEFAULT_CONTENT) -> Content:
     symbols = dict(data.get('symbols') or {})
     _require(set(symbols) == set(SYMBOL_KEYS), f'symbols должны быть ровно {", ".join(SYMBOL_KEYS)}')
@@ -230,6 +274,7 @@ def parse_content(data: dict, name: str = DEFAULT_CONTENT) -> Content:
 
     flights = _parse_flights(data.get('flights') or [], symbols)
     archive = _parse_archive(data.get('archive') or [])
+    _check_all_marks(flights, program, archive)
 
     return Content(
         name=name,

@@ -12,7 +12,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from . import engine, services
-from .loader import ContentError, get_content, parse_content
+from .loader import ContentError, get_content, parse_content, render_gender
 from .models import ArchiveOpen, DarkEntry, Game, Player, Purchase, RadioMessage, TaskAttempt, Token
 
 
@@ -41,6 +41,11 @@ def give_token(game: Game, owner: Player, symbol: str, code: str, minutes_ago: f
     """Жетон, выданный игроку `owner` `minutes_ago` минут назад."""
     return Token.objects.create(game=game, code=code, symbol=symbol, issued_to=owner,
                                 issued_at=timezone.now() - timedelta(minutes=minutes_ago))
+
+
+def shown(game: Game, text: str) -> str:
+    """Текст контента так, как его видит игрок игры (метки рода подставлены)."""
+    return render_gender(text, services.game_genders(game))
 
 
 def load_yaml() -> dict:
@@ -288,8 +293,9 @@ class ContentTests(SimpleTestCase):
         callsigns = [c.callsign.casefold() for c in content.characters]
         for c in content.characters:
             for text in c.dossier.values():
+                text = re.sub(r'\{[^{}]*\}', '', text.casefold())     # метки рода — не текст игрока
                 for callsign in callsigns:
-                    self.assertNotIn(callsign, text.casefold())
+                    self.assertNotIn(callsign, text)
 
     def test_archive_has_21_entries_verbatim(self):
         import pathlib
@@ -371,6 +377,109 @@ class ContentTests(SimpleTestCase):
         data['archive'][0]['kind'] = 'Сказка'
         with self.assertRaises(ContentError):
             parse_content(data)
+
+
+# --- Пол ролей: метки рода -------------------------------------------------
+
+class RenderGenderTests(SimpleTestCase):
+    def test_male_and_female_variants(self):
+        text = '{Семь-Три:погиб|погибла}'
+        self.assertEqual(render_gender(text, {'Семь-Три': 'm'}), 'погиб')
+        self.assertEqual(render_gender(text, {'Семь-Три': 'f'}), 'погибла')
+
+    def test_several_marks_with_different_callsigns(self):
+        text = 'Ему {Семь-Три:повезло|повезло}, {Два-Два:он|она} {Семь-Три:ушёл|ушла}.'
+        self.assertEqual(render_gender(text, {'Семь-Три': 'f', 'Два-Два': 'm'}), 'Ему повезло, он ушла.')
+
+    def test_empty_variant(self):
+        self.assertEqual(render_gender('Это {Семь-Три:|не }так', {'Семь-Три': 'm'}), 'Это так')
+        self.assertEqual(render_gender('Это {Семь-Три:|не }так', {'Семь-Три': 'f'}), 'Это не так')
+
+    def test_text_without_marks_is_unchanged(self):
+        self.assertEqual(render_gender('Просто текст: 1407.', {}), 'Просто текст: 1407.')
+
+    def test_unknown_callsign_is_an_error(self):
+        with self.assertRaises(KeyError):
+            render_gender('{Семь-Три:а|б}', {'Два-Два': 'm'})
+
+
+class GenderContentTests(SimpleTestCase):
+    def test_characters_have_gender_and_names(self):
+        content = get_content('game')
+        for c in content.characters:
+            self.assertIn(c.gender, ('m', 'f'))
+            self.assertEqual(set(c.names), {'m', 'f'})
+        self.assertEqual(content.character('f1c2').gender, 'm')
+        self.assertEqual(content.character('f1c2').names, {'m': 'Илья Смолин', 'f': 'Инна Смолина'})
+        by_callsign = {c.callsign: c for c in content.characters}
+        self.assertEqual(by_callsign['Один-Один'].gender, 'f')
+        self.assertEqual(by_callsign['Девять-Один'].names['f'], 'Соня Гордеева')
+        self.assertEqual(by_callsign['Пять-Один'].names['m'], 'Константин Остроумов')
+
+    def test_no_braces_left_after_rendering_any_gender(self):
+        content = get_content('game')
+        for gender in ('m', 'f'):
+            genders = {c.callsign: gender for c in content.characters}
+            texts = [p.text for p in content.program] + [e.text for e in content.archive]
+            for c in content.characters:
+                texts += [p.text for p in c.memory] + list(c.dossier.values())
+            for text in texts:
+                rendered = render_gender(text, genders)
+                self.assertNotIn('{', rendered)
+                self.assertNotIn('}', rendered)
+                self.assertNotIn('|', rendered)
+
+    def test_archive_variants_differ_by_gender(self):
+        text = get_content('game').archive_entry('1455').text
+        self.assertIn('Корреспондент — Савва.', render_gender(text, {'Девять-Один': 'm'}))
+        self.assertIn('Корреспондент — Соня.', render_gender(text, {'Девять-Один': 'f'}))
+
+    def test_loader_rejects_bad_gender_and_names(self):
+        for bad in ('x', '', None):
+            data = load_yaml()
+            data['flights'][0]['characters'][0]['gender'] = bad
+            with self.assertRaises(ContentError, msg=bad):
+                parse_content(data)
+        data = load_yaml()
+        del data['flights'][0]['characters'][0]['names']['f']
+        with self.assertRaises(ContentError):
+            parse_content(data)
+        data = load_yaml()
+        del data['flights'][0]['characters'][0]['gender']
+        with self.assertRaises(ContentError):
+            parse_content(data)
+
+    def test_loader_rejects_broken_marks(self):
+        def memory_text(data, text):
+            data['flights'][0]['characters'][1]['memory'][0]['text'] = text
+
+        def dossier_text(data, text):
+            data['flights'][0]['characters'][1]['dossier']['life'] = text
+
+        def program_text(data, text):
+            data['program'][0]['text'] = text
+
+        def archive_text(data, text):
+            data['archive'][0]['text'] = text
+
+        broken = (
+            '{Семь-Три:погиб}',                 # нет женского варианта
+            '{Семь-Три:а|б|в}',                 # лишний разделитель
+            '{Семь-Три погиб|погибла}',         # нет двоеточия
+            '{Сорок-Два:погиб|погибла}',        # неизвестный позывной
+            'лишняя } скобка',
+            'открытая { скобка',
+            '{Семь-Три:а|{Два-Два:б|в}}',       # вложенность
+        )
+        for setter in (memory_text, dossier_text, program_text, archive_text):
+            for text in broken:
+                data = load_yaml()
+                setter(data, f'[заглушка] {text}')
+                with self.assertRaises(ContentError, msg=f'{setter.__name__}: {text}'):
+                    parse_content(data)
+            data = load_yaml()
+            setter(data, '[заглушка] {Семь-Три:погиб|погибла}, {Девять-Один:|}')
+            parse_content(data)                 # корректные метки проходят
 
 
 # --- Страницы: цепочка и уровни ---------------------------------------------
@@ -826,6 +935,166 @@ class ArchiveCodeTests(TestCase):
         self.assertIn('<br>— Читала.', html)
 
 
+class GenderTests(TestCase):
+    def setUp(self):
+        self.game = make_game(started_minutes_ago=120)
+        self.staff = get_user_model().objects.create_user('master', password='x', is_staff=True)
+        self.url = reverse('ls:master_action', args=[self.game.pk])
+
+    def set_gender(self, callsign: str, gender: str) -> Player:
+        player = player_by(self.game, callsign)
+        player.gender = gender
+        player.save()
+        return player
+
+    def test_create_game_takes_gender_from_content(self):
+        game = services.create_game('Все', 'ALL', 'game', 3)
+        for c in get_content('game').characters:
+            self.assertEqual(game.players.get(callsign=c.callsign).gender, c.gender, c.callsign)
+        self.assertEqual(player_by(game, 'Семь-Три').gender, 'm')
+        self.assertEqual(player_by(game, 'Два-Два').gender, 'f')
+
+    def test_game_genders_cover_every_character(self):
+        self.set_gender('Семь-Три', 'f')
+        genders = services.game_genders(self.game)                 # в игре одно звено из трёх
+        self.assertEqual(len(genders), 15)
+        self.assertEqual(genders['Семь-Три'], 'f')
+        self.assertEqual(genders['Три-Три'], 'm')                  # звена нет в игре: пол из контента
+
+    def test_master_changes_gender(self):
+        player = player_by(self.game, 'Девять-Один')
+        self.client.force_login(self.staff)
+        self.client.post(self.url, {'op': 'gender:f', 'player': player.pk})
+        player.refresh_from_db()
+        self.assertEqual(player.gender, 'f')
+        self.client.post(self.url, {'op': 'gender:m', 'player': player.pk})
+        player.refresh_from_db()
+        self.assertEqual(player.gender, 'm')
+        self.client.post(self.url, {'op': 'gender:x', 'player': player.pk})
+        player.refresh_from_db()
+        self.assertEqual(player.gender, 'm')
+
+    def test_master_page_shows_gender_and_current_name(self):
+        player = player_by(self.game, 'Девять-Один')
+        self.client.force_login(self.staff)
+        url = reverse('ls:master_game', args=[self.game.pk])
+        html = self.client.get(url).content.decode()
+        self.assertIn('<th>Пол</th>', html)
+        self.assertIn('Савва Гордеев', html)
+        self.assertNotIn('Соня Гордеева', html)
+        self.assertIn('не перерисовываются', html)
+        self.client.post(self.url, {'op': 'gender:f', 'player': player.pk})
+        html = self.client.get(url).content.decode()
+        self.assertIn('Соня Гордеева', html)
+        self.assertNotIn('Савва Гордеев', html)
+        journal = self.client.get(reverse('ls:master_player', args=[self.game.pk, player.pk])).content.decode()
+        self.assertIn('Соня Гордеева', journal)
+
+    def test_archive_by_code_follows_gender(self):
+        player = player_by(self.game, 'Девять-Один')
+        self.assertIn('Корреспондент — Савва.', services.redeem_codes(player, '1455')[0].payload)
+        self.set_gender('Девять-Один', 'f')
+        player.refresh_from_db()
+        payload = services.redeem_codes(player, '1455')[0].payload
+        self.assertIn('Корреспондент — Соня.', payload)
+        self.assertIn('«Она в списке.', payload)
+        self.assertNotIn('{', payload)
+
+    def test_archive_by_card_follows_gender(self):
+        player = self.set_gender('Девять-Один', 'f')
+        player.cards = 1
+        player.save()
+        for entry in get_content('game').archive_queue[:8]:
+            ArchiveOpen.objects.create(player=player, code=entry.code, via='code')
+        outcome = services.buy(player, 'archive')
+        self.assertTrue(outcome.ok)
+        self.assertIn('1456 · Мой сын', outcome.payload)
+        self.assertIn('моя дочь', outcome.payload)
+        self.assertNotIn('мой сын в списке', outcome.payload)
+        self.assertNotIn('{', outcome.payload)
+        self.assertEqual(Purchase.objects.get().payload, '1456 · Мой сын')
+
+    def test_known_page_renders_archive_at_view_time(self):
+        player = player_by(self.game, 'Девять-Один')
+        ArchiveOpen.objects.create(player=player, code='1455', via='code')
+        login(self.client, self.game, player)
+        html = self.client.get(reverse('ls:known')).content.decode()
+        self.assertIn('Корреспондент — Савва.', html)
+        self.set_gender('Девять-Один', 'f')
+        html = self.client.get(reverse('ls:known')).content.decode()
+        self.assertIn('Корреспондент — Соня.', html)
+        body = html.split('<h2>Что я знаю</h2>')[1]               # до этого места только CSS страницы
+        self.assertNotIn('{', body)
+        self.assertNotIn('|', body)
+
+    def test_archive_of_character_outside_game_uses_content_gender(self):
+        player = player_by(self.game, 'Семь-Три')
+        outcome = services.redeem_codes(player, '3108')[0]       # Три-Три и Ноль-Семь из другого звена
+        self.assertIn('Ахмеров.', outcome.payload)
+        self.assertIn('вывел из горящего отсека', outcome.payload)
+
+    def test_memory_purchase_stores_rendered_text(self):
+        player = self.set_gender('Семь-Три', 'f')
+        player.cards = 2
+        player.save()
+        outcome = services.buy(player, 'self')
+        self.assertIn('«Ин…»', outcome.payload)
+        self.assertEqual(Purchase.objects.get().payload, outcome.payload)
+        self.set_gender('Семь-Три', 'm')                          # выданное не перерисовывается
+        self.assertIn('«Ин…»', Purchase.objects.get().payload)
+        player.refresh_from_db()
+        login(self.client, self.game, player)
+        html = self.client.get(reverse('ls:known')).content.decode()
+        self.assertIn('«Ин…»', html)
+        self.assertNotIn('{', html.split('<h2>Что я знаю</h2>')[1])
+
+    def test_dossier_purchase_stores_rendered_text(self):
+        player = player_by(self.game, 'Семь-Три')
+        player.cards = 15
+        player.save()
+        for _ in range(15):
+            services.buy(player, 'flight')
+        payloads = ' '.join(Purchase.objects.filter(kind='flight').values_list('payload', flat=True))
+        self.assertIn('учитель физики', payloads)
+        self.set_gender('Семь-Три', 'f')
+        player.refresh_from_db()
+        player.dossier_order = []
+        player.save()
+        Purchase.objects.all().delete()
+        player.cards = 15
+        player.save()
+        for _ in range(15):
+            services.buy(player, 'flight')
+        payloads = ' '.join(Purchase.objects.filter(kind='flight').values_list('payload', flat=True))
+        self.assertIn('учительница физики', payloads)
+        self.assertNotIn('{', payloads)
+
+    def test_no_player_visible_text_has_braces(self):
+        game = services.create_game('Все', 'ALL', 'game', 3)
+        game.started_at = timezone.now() - timedelta(minutes=120)
+        game.save()
+        codes = ' '.join(e.code for e in get_content('game').archive)
+        for gender in ('m', 'f'):
+            game.players.update(gender=gender, cards=40, sync_nav=100, sync_move=100, sync_parts=100, sync_fire=100)
+            shown = []
+            for player in game.players.all():
+                shown += [o.payload for o in services.redeem_codes(player, codes)]
+                for kind in ['self'] * 6 + ['flight'] * 15 + ['program'] * 8 + ['archive'] * 10:
+                    player.refresh_from_db()
+                    shown.append(services.buy(player, kind).payload)
+            shown += Purchase.objects.values_list('payload', flat=True)
+            self.assertGreater(len(shown), 400)
+            for text in shown:
+                self.assertNotIn('{', text)
+                self.assertNotIn('}', text)
+            player = game.players.first()
+            login(self.client, game, player)
+            html = self.client.get(reverse('ls:known')).content.decode()
+            self.assertNotIn('{', html.split('<h2>Что я знаю</h2>')[1])
+            Purchase.objects.all().delete()
+            game.players.update(memory_index=0, program_index=0, dossier_order=[])
+
+
 class WrongCodeTests(TestCase):
     def setUp(self):
         self.game = make_game(started_minutes_ago=40)
@@ -949,9 +1218,9 @@ class CardTests(TestCase):
         self.game.started_at = timezone.now() - timedelta(minutes=30)
         self.game.save()
         packs = get_content('game').character(self.player.character_id).memory
-        self.assertEqual(services.buy(self.player, 'self').payload, packs[0].text)   # без замка
-        self.assertEqual(services.buy(self.player, 'self').payload, packs[1].text)   # 25
-        self.assertEqual(services.buy(self.player, 'self').payload, packs[2].text)   # 25
+        self.assertEqual(services.buy(self.player, 'self').payload, shown(self.game, packs[0].text))   # без замка
+        self.assertEqual(services.buy(self.player, 'self').payload, shown(self.game, packs[1].text))   # 25
+        self.assertEqual(services.buy(self.player, 'self').payload, shown(self.game, packs[2].text))   # 25
         # телесный пакет ждёт открытия параметра parts
         self.assertIn('Пока нет', services.buy(self.player, 'self').message)
         self.player.refresh_from_db()
@@ -1065,7 +1334,7 @@ class CardTests(TestCase):
         for entry in queue[:3]:
             outcome = services.buy(self.player, 'archive')
             self.assertTrue(outcome.ok)
-            self.assertIn(entry.text, outcome.payload)
+            self.assertIn(shown(self.game, entry.text), outcome.payload)
         self.assertEqual(list(self.player.archive_opens.values_list('code', 'via')),
                          [(e.code, 'card') for e in queue[:3]])
         self.assertEqual(self.reload().cards, 7)
@@ -1083,7 +1352,7 @@ class CardTests(TestCase):
         self.game.save()
         services.redeem_codes(self.player, '6060')
         outcome = services.buy(self.player, 'archive')
-        self.assertIn(get_content('game').archive_queue[1].text, outcome.payload)
+        self.assertIn(shown(self.game, get_content('game').archive_queue[1].text), outcome.payload)
         self.assertEqual(self.player.archive_opens.count(), 2)
 
     def test_code_after_card_does_not_duplicate(self):

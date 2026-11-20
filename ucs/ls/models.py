@@ -25,6 +25,10 @@ PURCHASE_KINDS = [
     ('archive', 'Архив'),
     ('radio', 'Рация'),
 ]
+GENDER_CHOICES = [
+    ('m', 'м'),
+    ('f', 'ж'),
+]
 ARCHIVE_VIA = [
     ('code', 'код'),
     ('card', 'карта'),
@@ -78,6 +82,7 @@ class Player(models.Model):
     symbol = models.CharField('символ', max_length=16, choices=SYMBOL_CHOICES)
     is_imp = models.BooleanField('ИМП', default=False)
     character_id = models.CharField('персонаж', max_length=32)
+    gender = models.CharField('пол роли', max_length=1, choices=GENDER_CHOICES, default='m')
 
     sync_nav = models.PositiveSmallIntegerField(default=0)
     sync_move = models.PositiveSmallIntegerField(default=0)

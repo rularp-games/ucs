@@ -2,7 +2,7 @@
 {% block title %}Мастер · {{ player.callsign }}{% endblock %}
 {% block content %}
 <p><a href="{% url 'ls:master_game' game.pk %}">&larr; {{ game.title }}</a></p>
-<h2>{{ player.callsign }} <span class="dim">· {{ player.flight.name }}</span></h2>
+<h2>{{ player.callsign }} <span class="dim">· {{ character_name }} ({{ player.get_gender_display }}) · {{ player.flight.name }}</span></h2>
 <div class="panel">
   Навигация {{ player.sync_nav }}% · Движение {{ player.sync_move }}% · Части {{ player.sync_parts }}% · Огонь {{ player.sync_fire }}%
   · Карты {{ player.cards }} · Рация {{ player.radio_level }}

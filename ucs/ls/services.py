@@ -15,7 +15,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import engine
-from .loader import get_content
+from .loader import get_content, render_gender
 from .models import (TOKEN_TTL, ArchiveOpen, DarkEntry, Flight, Game, Player, Purchase,
                      TaskAttempt, Token)
 
@@ -61,8 +61,20 @@ def create_game(title: str, code: str, content_name: str, flights_count: int) ->
                 symbol=character.symbol,
                 is_imp=character.is_imp,
                 character_id=character.id,
+                gender=character.gender,
             )
     return game
+
+
+def game_genders(game: Game) -> dict[str, str]:
+    """Полный словарь `{позывной: пол}` для подстановки меток рода.
+
+    Основа — исходный пол из контента (в игре могут быть не все звенья, а записи архива
+    ссылаются на персонажей любого), поверх него — пол, выставленный игрокам игры.
+    """
+    genders = {c.callsign: c.gender for c in get_content(game.content_name).characters}
+    genders.update(game.players.values_list('callsign', 'gender'))
+    return genders
 
 
 # --- Синхронизация ----------------------------------------------------------
@@ -157,8 +169,8 @@ def _wrong_code(player: Player, code: str, now) -> Outcome:
     return Outcome(LEVEL_BAD, message)
 
 
-def _entry_payload(entry) -> str:
-    return f'{entry.code} · {entry.title}\n\n{entry.text}'
+def _entry_payload(entry, genders: dict[str, str]) -> str:
+    return f'{entry.code} · {entry.title}\n\n{render_gender(entry.text, genders)}'
 
 
 def _redeem_token(player: Player, token: Token, now) -> Outcome:
@@ -184,12 +196,12 @@ def _redeem_archive(player: Player, entry, now) -> Outcome:
     code = entry.code
     if player.archive_opens.filter(code=code).exists():
         _right_code(player)
-        return Outcome(LEVEL_OK, f'{code}: запись уже открыта.', _entry_payload(entry))
+        return Outcome(LEVEL_OK, f'{code}: запись уже открыта.', _entry_payload(entry, game_genders(player.game)))
     if not lock_open(entry.not_before, player.game.game_minutes(now)):
         return Outcome(LEVEL_WARN, f'{code}: запись недоступна. Повторите позже.')
     ArchiveOpen.objects.create(player=player, code=code, via='code', created_at=now)
     _right_code(player)
-    return Outcome(LEVEL_OK, f'{code}: запись открыта.', _entry_payload(entry))
+    return Outcome(LEVEL_OK, f'{code}: запись открыта.', _entry_payload(entry, game_genders(player.game)))
 
 
 def _redeem_one(player: Player, code: str, now) -> Outcome:
@@ -253,10 +265,11 @@ def _buy_self(player: Player, minutes: float | None) -> Outcome:
         return NOT_YET
     if pack.requires_param_open and not engine.is_open(player.sync_values(), pack.requires_param_open):
         return NOT_YET
+    text = render_gender(pack.text, game_genders(player.game))
     player.memory_index += 1
     player.save(update_fields=['memory_index'])
-    _spend(player, 'self', pack.text)
-    return Outcome(LEVEL_OK, 'Получен пакет памяти.', pack.text)
+    _spend(player, 'self', text)
+    return Outcome(LEVEL_OK, 'Получен пакет памяти.', text)
 
 
 def _buy_flight(player: Player, minutes: float | None) -> Outcome:
@@ -271,7 +284,7 @@ def _buy_flight(player: Player, minutes: float | None) -> Outcome:
     char_id, part = player.dossier_order[received]
     if not lock_open(content.dossier_locks[part], minutes):
         return NOT_YET
-    text = content.character(char_id).dossier[part]
+    text = render_gender(content.character(char_id).dossier[part], game_genders(player.game))
     _spend(player, 'flight', text)
     return Outcome(LEVEL_OK, 'Получена карточка досье.', text)
 
@@ -283,10 +296,11 @@ def _buy_program(player: Player, minutes: float | None) -> Outcome:
     pack = program[player.program_index]
     if not lock_open(pack.not_before, minutes):
         return NOT_YET
+    text = render_gender(pack.text, game_genders(player.game))
     player.program_index += 1
     player.save(update_fields=['program_index'])
-    _spend(player, 'program', pack.text)
-    return Outcome(LEVEL_OK, 'Получен пакет о программе.', pack.text)
+    _spend(player, 'program', text)
+    return Outcome(LEVEL_OK, 'Получен пакет о программе.', text)
 
 
 def _buy_archive(player: Player, minutes: float | None) -> Outcome:
@@ -299,7 +313,7 @@ def _buy_archive(player: Player, minutes: float | None) -> Outcome:
         return NOT_YET
     ArchiveOpen.objects.create(player=player, code=entry.code, via='card')
     _spend(player, 'archive', f'{entry.code} · {entry.title}')
-    return Outcome(LEVEL_OK, 'Получена запись архива.', _entry_payload(entry))
+    return Outcome(LEVEL_OK, 'Получена запись архива.', _entry_payload(entry, game_genders(player.game)))
 
 
 def _buy_radio(player: Player, minutes: float | None) -> Outcome:

@@ -16,7 +16,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from . import engine, services
-from .loader import ContentError, available_contents, get_content
+from .loader import GENDERS, ContentError, available_contents, get_content, render_gender
 from .models import TOKEN_TTL, Game, Player, RadioMessage
 from .services import LEVEL_BAD, LEVEL_OK
 
@@ -332,8 +332,9 @@ def known(request):
         for kind, title in streams
     ]
     entries = {e.code: e for e in get_content(player.game.content_name).archive}
+    genders = services.game_genders(player.game)
     archive = [
-        {'code': o.code, 'title': entries[o.code].title, 'text': entries[o.code].text}
+        {'code': o.code, 'title': entries[o.code].title, 'text': render_gender(entries[o.code].text, genders)}
         for o in player.archive_opens.all() if o.code in entries
     ]
     return render_player(request, 'ls/known.html', {'sections': sections, 'archive': archive, 'active': 'known'})
@@ -414,6 +415,11 @@ def master_index(request):
     })
 
 
+def _character_name(content, player: Player) -> str:
+    """Полное имя персонажа по текущему полу игрока."""
+    return content.character(player.character_id).names[player.gender]
+
+
 @staff_member_required
 def master_game(request, game_id):
     game = get_object_or_404(Game, pk=game_id)
@@ -421,7 +427,9 @@ def master_game(request, game_id):
         purchase_count=Count('purchases', distinct=True),
         archive_count=Count('archive_opens', distinct=True),
     ))
+    content = get_content(game.content_name)
     for p in players:
+        p.character_name = _character_name(content, p)
         p.sync_cells = [
             {'key': key, 'title': engine.PARAM_TITLES[key], 'value': p.get_sync(key),
              'mode': engine.mode_of(p.sync_values(), key)}
@@ -476,6 +484,8 @@ def master_action(request, game_id):
                 player.set_sync(parts[1], max(0, min(engine.SYNC_MAX, value)))
             elif parts[0] == 'cards':
                 player.cards = max(0, player.cards + int(parts[1]))
+            elif parts[0] == 'gender' and parts[1] in GENDERS:
+                player.gender = parts[1]
             elif parts[0] == 'radio':
                 player.radio_level = max(0, min(services.RADIO_MAX, player.radio_level + int(parts[1])))
             else:
@@ -513,6 +523,7 @@ def master_player(request, game_id, player_id):
     return render(request, 'ls/master_player.html', {
         'game': game,
         'player': player,
+        'character_name': _character_name(get_content(game.content_name), player),
         'attempts': player.attempts.all()[:200],
         'purchases': player.purchases.all(),
         'tokens_issued': issued,

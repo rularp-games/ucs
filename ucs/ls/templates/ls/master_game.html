@@ -57,12 +57,22 @@
 <h2>Игроки</h2>
 <div class="panel table-wrap">
 <table>
-  <tr><th>Позывной</th><th>Звено</th><th>Символ</th>
+  <tr><th>Позывной</th><th>Имя</th><th>Пол</th><th>Звено</th><th>Символ</th>
     <th>Навигация</th><th>Движение</th><th>Части</th><th>Огонь</th>
     <th>Карты</th><th>Рация</th><th>Покупок</th><th>Архив</th></tr>
   {% for p in players %}
   <tr id="p{{ p.pk }}">
     <td><a href="{% url 'ls:master_player' game.pk p.pk %}">{{ p.callsign }}</a>{% if p.is_imp %} <span class="tag">ИМП</span>{% endif %}</td>
+    <td>{{ p.character_name }}</td>
+    <td>
+      <form method="post" action="{% url 'ls:master_action' game.pk %}">
+        {% csrf_token %}<input type="hidden" name="player" value="{{ p.pk }}">
+        <span class="cellv">
+          <button class="small{% if p.gender == 'm' %} primary{% endif %}" name="op" value="gender:m"{% if p.gender == 'm' %} disabled{% endif %}>м</button>
+          <button class="small{% if p.gender == 'f' %} primary{% endif %}" name="op" value="gender:f"{% if p.gender == 'f' %} disabled{% endif %}>ж</button>
+        </span>
+      </form>
+    </td>
     <td>{{ p.flight.name }}</td>
     <td>{% symbol_icon p.symbol 18 %} {{ p.symbol|symbol_name }}</td>
     {% for c in p.sync_cells %}
@@ -95,4 +105,5 @@
   {% endfor %}
 </table>
 </div>
+<p class="dim" style="font-size:13px">Пол можно менять в любой момент, но уже выданные пакеты памяти, досье, программы и записи архива не перерисовываются: текст подставляется при выдаче. Записи архива в «Что я знаю» берут пол на момент показа.</p>
 {% endblock %}
